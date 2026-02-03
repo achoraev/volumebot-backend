@@ -1,58 +1,95 @@
-import { Connection, Keypair, VersionedTransaction } from '@solana/web3.js';
-import fetch from 'cross-fetch';
+import { Connection, Keypair, VersionedTransaction, PublicKey } from "@solana/web3.js";
+import fetch from "cross-fetch";
 
-/**
- * Executes a swap using Jupiter V6 API
- * @param wallet The child wallet performing the trade
- * @param outputMint The token address you want to buy/volume
- * @param amountInSol Amount of SOL to spend
- */
-export async function createVolume(wallet: Keypair, outputMint: string, amountInSol: number) {
-    const connection = new Connection(process.env.RPC_URL || "https://api.mainnet-beta.solana.com");
+const PUMP_API_URL = "https://public.jupiterapi.com";
+const SOL_MINT = "So11111111111111111111111111111111111111112";
 
+async function getTokenBalance(connection: Connection, wallet: PublicKey, mint: string): Promise<string> {
     try {
-        // 1. Get the Quote (Price and Route)
-        const amountInLamports = Math.floor(amountInSol * 1_000_000_000);
-        const quoteUrl = `https://quote-api.jup.ag/v6/quote?inputMint=So11111111111111111111111111111111111111112&outputMint=${outputMint}&amount=${amountInLamports}&slippageBps=100`;
+        const accounts = await connection.getTokenAccountsByOwner(wallet, {
+            mint: new PublicKey(mint)
+        });
+        if (accounts.value.length === 0) return "0";
         
-        const quoteResponse = await (await fetch(quoteUrl)).json();
+        const balance = await connection.getTokenAccountBalance(accounts.value[0].pubkey);
+        return balance.value.amount; // Returns raw amount with decimals (e.g., "1000000")
+    } catch (e) {
+        return "0";
+    }
+}
 
-        if (!quoteResponse.outAmount) {
-            throw new Error("Unable to get quote from Jupiter");
+export async function executeSwap(
+    connection: Connection, 
+    wallet: Keypair, 
+    tokenAddr: string, 
+    action: "BUY" | "SELL",
+    amount?: number // Only needed for BUY. For SELL, we'll sell 100% of balance.
+) {
+    try {
+        let inputMint = action === "BUY" ? SOL_MINT : tokenAddr;
+        let outputMint = action === "BUY" ? tokenAddr : SOL_MINT;
+        let swapAmount: string;
+
+        if (action === "SELL") {
+            swapAmount = await getTokenBalance(connection, wallet.publicKey, tokenAddr);
+            if (swapAmount === "0") throw new Error("No tokens found to sell.");
+            console.log(`[SELL] Selling all tokens (${swapAmount} units)...`);
+        } else {
+            swapAmount = amount!.toString();
+            console.log(`[BUY] Buying tokens for ${amount} lamports...`);
         }
 
-        // 2. Get the Swap Transaction
-        const swapResponse = await (
-            await fetch('https://quote-api.jup.ag/v6/swap', {
+        // 1. Try Jupiter Path
+        const jupQuoteUrl = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${swapAmount}&slippageBps=100`;
+        const jupRes = await fetch(jupQuoteUrl);
+        const jupData = await jupRes.json();
+
+        let swapTransaction: string;
+
+        if (jupData.error && jupData.errorCode === "TOKEN_NOT_TRADABLE") {
+            // 2. Pump.fun Curve Path
+            console.log("📍 Using Pump.fun curve route...");
+            const pumpSwapRes = await fetch(`${PUMP_API_URL}/pump-fun/swap`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    quoteResponse,
-                    userPublicKey: wallet.publicKey.toString(),
-                    wrapAndUnwrapSol: true,
-                    // Optional: Add priority fees here to ensure trades land
-                    prioritizationFeeLamports: 50000 
+                    wallet: wallet.publicKey.toBase58(),
+                    type: action,
+                    mint: tokenAddr,
+                    inAmount: swapAmount,
+                    priorityFeeLevel: "high",
+                    slippageBps: 300 // Slightly higher slippage for sells on the curve
                 })
-            })
-        ).json();
+            });
 
-        // 3. Deserialize and Sign the Transaction
-        const swapTransactionBuf = Buffer.from(swapResponse.swapTransaction, 'base64');
-        var transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-        
+            const pumpData: any = await pumpSwapRes.json();
+            swapTransaction = pumpData.swapTransaction;
+        } else {
+            // 3. Jupiter/Raydium Path
+            console.log("🚀 Using Jupiter Raydium path...");
+            const jupSwapRes = await fetch('https://lite-api.jup.ag/swap/v1/swap', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    quoteResponse: jupData,
+                    userPublicKey: wallet.publicKey.toBase58(),
+                    wrapAndUnwrapSol: true
+                })
+            });
+
+            const jupSwapData: any = await jupSwapRes.json();
+            swapTransaction = jupSwapData.swapTransaction;
+        }
+
+        // 4. Execution
+        const transaction = VersionedTransaction.deserialize(Buffer.from(swapTransaction, 'base64'));
         transaction.sign([wallet]);
-
-        // 4. Send the Transaction
-        const signature = await connection.sendRawTransaction(transaction.serialize(), {
-            skipPreflight: true,
-            maxRetries: 2
-        });
-
-        console.log(`[SUCCESS] Trade executed by ${wallet.publicKey.toBase58().slice(0,6)}: https://solscan.io/tx/${signature}`);
+        const signature = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true });
+        
+        console.log(`✅ ${action} Successful: https://solscan.io/tx/${signature}`);
         return signature;
 
     } catch (error) {
-        console.error(`[ERROR] Swap failed:`, error);
-        throw error;
+        console.error(`[ERROR] ${action} Failed:`, error);
     }
 }
