@@ -1,28 +1,91 @@
 
-import { Connection, Keypair, VersionedTransaction, PublicKey } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { activeBots } from '../logic/looper';
 import { executeSwap } from '../engine/jupiter';
+import { checkPriceAlert } from '../logic/tracker';
 
-export async function runVolumeLoop(wallet: Keypair, token: string, settings: any) {
+export async function runVolumeLoop(wallet: Keypair, token: string, settings: any, signal: AbortSignal) {
     let buyCount = 0;
     let targetBuys = Math.floor(Math.random() * (settings.maxBuys - settings.minBuys + 1)) + settings.minBuys;
     const connection = new Connection(process.env.RPC_URL!);
+    const { dryRun } = settings;
+
+    console.log(`[LOOP] Starting volume for ${token}. Initial target: ${targetBuys} buys. Mode: ${dryRun ? 'DRY' : 'LIVE'}`);
 
     while (activeBots.get(token) === true) {
+        if (signal.aborted) return;
+
         try {
             if (buyCount < targetBuys) {
-                await executeSwap(connection, wallet, token, "BUY", settings.buyAmount);
+                const min = parseFloat(settings.minAmount || 0.01);
+                const max = parseFloat(settings.maxAmount || 0.02);
+                const randomBuyAmount = Math.random() * (max - min) + min;
+                const finalAmount = parseFloat(randomBuyAmount.toFixed(4));
+
+                if (isNaN(finalAmount)) {
+                    throw new Error("Invalid Buy Amount: Calculations resulted in NaN. Check settings keys.");
+                }
+
+                console.log(`[LOOP] Step ${buyCount + 1}/${targetBuys}: BUY ${finalAmount} SOL`);
+                await executeSwap(connection, wallet, token, "BUY", finalAmount, dryRun);
                 buyCount++;
             } else {
-                await executeSwap(connection, wallet, token, "SELL");
+                console.log(`[LOOP] Target ${targetBuys} reached. Preparing to SELL ALL...`);
+
+                if (dryRun) {
+                    await executeSwap(connection, wallet, token, "SELL", 0, true);
+                } else {
+                    const balance = await getTokenBalance(connection, wallet.publicKey, token);
+                    
+                    if (balance > 0) {
+                        console.log(`[SELL] Selling balance: ${balance} (raw units)`);
+                        await executeSwap(connection, wallet, token, "SELL", balance, false);
+                    } else {
+                        console.log("[SELL] No tokens found to sell. Skipping to next cycle.");
+                    }
+                }
+
                 buyCount = 0;
                 targetBuys = Math.floor(Math.random() * (settings.maxBuys - settings.minBuys + 1)) + settings.minBuys;
+                console.log(`[LOOP] Cycle reset. New target: ${targetBuys} buys.`);
             }
 
-            const delay = Math.floor(Math.random() * (settings.maxDelay - settings.minDelay + 1) + settings.minDelay) * 1000;
-            await new Promise(r => setTimeout(r, delay));
-        } catch (e) {
+            const minD = parseInt(settings.minDelay || 10);
+            const maxD = parseInt(settings.maxDelay || 30);
+            const delay = Math.floor(Math.random() * (maxD - minD + 1) + minD) * 1000;
+            
+            console.log(`[WAIT] Sleeping for ${delay / 1000}s...`);
+            await new Promise((resolve, reject) => {
+                const timer = setTimeout(resolve, delay);
+                signal.addEventListener('abort', () => {
+                    clearTimeout(timer);
+                    reject(new Error('AbortError'));
+                }, { once: true });
+            });
+
+        } catch (e: any) {
+            if (e.message === 'AbortError') throw e;
+            console.error(`[LOOP ERROR]`, e.message);
             await new Promise(r => setTimeout(r, 5000));
         }
+    }
+    console.log(`[STOP] Loop for ${token} terminated.`);
+}
+
+async function getTokenBalance(connection: Connection, wallet: PublicKey, mint: string): Promise<number> {
+    try {
+        const parsedTokenAccounts = await connection.getParsedTokenAccountsByOwner(
+            wallet,
+            { mint: new PublicKey(mint) }
+        );
+
+        if (parsedTokenAccounts.value.length === 0) return 0;
+
+        // Get the amount in raw units (taking decimals into account)
+        const amount = parsedTokenAccounts.value[0].account.data.parsed.info.tokenAmount.amount;
+        return parseInt(amount);
+    } catch (e) {
+        console.error("[BALANCE ERROR] Could not fetch token balance:", e);
+        return 0;
     }
 }
