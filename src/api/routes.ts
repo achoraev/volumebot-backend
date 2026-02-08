@@ -71,6 +71,7 @@ router.post('/stop-bot', (req: Request, res: Response) => {
     if (!tokenAddress) return res.status(400).json({ error: "Token address required" });
 
     stopVolumeLoop(tokenAddress);
+    console.log(`[API] Stop signal sent for ${tokenAddress}`);
     res.json({ message: `Stopping bot for ${tokenAddress}...` });
 });
 

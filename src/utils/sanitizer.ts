@@ -8,7 +8,7 @@ export function sanitizeSettings(rawSettings: any) {
         
         minDelay: Math.max(1, parseInt(rawSettings.minDelay || 10)),
         maxDelay: Math.max(1, parseInt(rawSettings.maxDelay || 30)),
-        
-        buyAmount: parseFloat(rawSettings.buyAmount || rawSettings.minAmount || 0.01)
+
+        dryRun: rawSettings.dryRun === true || rawSettings.dryRun === 'true',
     };
 }

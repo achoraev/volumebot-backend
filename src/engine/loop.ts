@@ -8,12 +8,18 @@ export async function runVolumeLoop(wallet: Keypair, token: string, settings: an
     let buyCount = 0;
     let targetBuys = Math.floor(Math.random() * (settings.maxBuys - settings.minBuys + 1)) + settings.minBuys;
     const connection = new Connection(process.env.RPC_URL!);
-    const { dryRun } = settings;
+    const dryRun = settings.dryRun;
 
     console.log(`[LOOP] Starting volume for ${token}. Initial target: ${targetBuys} buys. Mode: ${dryRun ? 'DRY' : 'LIVE'}`);
 
+    if (signal.aborted) return;
+
     while (activeBots.get(token) === true) {
-        if (signal.aborted) return;
+
+        if (signal.aborted) {
+            console.log(`[LOOP] 🛑 Stop signal received for ${token}. Exiting loop...`);
+            break;
+        }
 
         try {
             if (buyCount < targetBuys) {
@@ -27,19 +33,19 @@ export async function runVolumeLoop(wallet: Keypair, token: string, settings: an
                 }
 
                 console.log(`[LOOP] Step ${buyCount + 1}/${targetBuys}: BUY ${finalAmount} SOL`);
-                await executeSwap(connection, wallet, token, "BUY", finalAmount, dryRun);
+                await executeSwap(connection, wallet, token, "BUY", dryRun, finalAmount);
                 buyCount++;
             } else {
                 console.log(`[LOOP] Target ${targetBuys} reached. Preparing to SELL ALL...`);
 
                 if (dryRun) {
-                    await executeSwap(connection, wallet, token, "SELL", 0, true);
+                    await executeSwap(connection, wallet, token, "SELL", true, 0);
                 } else {
                     const balance = await getTokenBalance(connection, wallet.publicKey, token);
                     
                     if (balance > 0) {
                         console.log(`[SELL] Selling balance: ${balance} (raw units)`);
-                        await executeSwap(connection, wallet, token, "SELL", balance, false);
+                        await executeSwap(connection, wallet, token, "SELL", false, balance);
                     } else {
                         console.log("[SELL] No tokens found to sell. Skipping to next cycle.");
                     }
@@ -55,6 +61,9 @@ export async function runVolumeLoop(wallet: Keypair, token: string, settings: an
             const delay = Math.floor(Math.random() * (maxD - minD + 1) + minD) * 1000;
             
             console.log(`[WAIT] Sleeping for ${delay / 1000}s...`);
+
+            await sleepWithAbort(delay * 1000, signal);
+
             await new Promise((resolve, reject) => {
                 const timer = setTimeout(resolve, delay);
                 signal.addEventListener('abort', () => {
@@ -66,7 +75,7 @@ export async function runVolumeLoop(wallet: Keypair, token: string, settings: an
         } catch (e: any) {
             if (e.message === 'AbortError') throw e;
             console.error(`[LOOP ERROR]`, e.message);
-            await new Promise(r => setTimeout(r, 5000));
+            await sleepWithAbort(5000, signal);
         }
     }
     console.log(`[STOP] Loop for ${token} terminated.`);
@@ -89,3 +98,14 @@ async function getTokenBalance(connection: Connection, wallet: PublicKey, mint: 
         return 0;
     }
 }
+
+const sleepWithAbort = (ms: number, signal: AbortSignal) => {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(resolve, ms);
+        
+        signal.addEventListener('abort', () => {
+            clearTimeout(timeout);
+            resolve(null); 
+        }, { once: true });
+    });
+};

@@ -8,16 +8,8 @@ const abortControllers = new Map<string, AbortController>();
 export const startVolumeLoop = (tokenAddress: string, settings: any) => {
     if (activeBots.get(tokenAddress)) return;
 
-    const isDryRun = settings.dryRun === true || settings.dryRun === 'true';
-    
-    const sanitizedSettings = {
-        ...settings,
-        dryRun: isDryRun,
-        buyAmount: parseFloat(settings.buyAmount || 0.01),
-    };
-
     console.log(`[SYSTEM] Starting Bot for ${tokenAddress}`);
-    console.log(`[MODE] ${isDryRun ? "🧪 DRY RUN ENABLED (Simulated)" : "⚠️ LIVE TRADING ENABLED (Real SOL)"}`);
+    console.log(`[MODE] ${settings.dryRun ? "🧪 DRY RUN ENABLED (Simulated)" : "⚠️ LIVE TRADING ENABLED (Real SOL)"}`);
 
     const controller = new AbortController();
     abortControllers.set(tokenAddress, controller);
@@ -31,7 +23,7 @@ export const startVolumeLoop = (tokenAddress: string, settings: any) => {
 
     const wallet = Keypair.fromSecretKey(bs58.decode(workerKey));
     
-    runVolumeLoop(wallet, tokenAddress, sanitizedSettings, controller.signal)
+    runVolumeLoop(wallet, tokenAddress, settings, controller.signal)
         .catch((err) => {
             if (err.name === 'AbortError') {
                 console.log(`[STOP] ${tokenAddress} loop aborted.`);
@@ -48,6 +40,7 @@ export const startVolumeLoop = (tokenAddress: string, settings: any) => {
 
 export const stopVolumeLoop = (tokenAddress: string) => {
     const controller = abortControllers.get(tokenAddress);
+    console.log(controller + " controller")
     if (controller) {
         console.log(`[STOP] Requesting abort for ${tokenAddress}...`);
         controller.abort(); 

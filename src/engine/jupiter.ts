@@ -2,18 +2,64 @@ import { Connection, Keypair, VersionedTransaction, PublicKey } from "@solana/we
 import fetch from "cross-fetch";
 import { trackSimulatedTrade, checkPriceAlert } from "../logic/tracker";
 
-const PUMP_API_URL = "https://public.jupiterapi.com";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
+const JUP_SWAP_API_URL = "https://api.jup.ag/swap/v1";
+
+const priceCache: Record<string, { price: number; timestamp: number }> = {};
+const CACHE_DURATION_MS = 10 * 1000;
+
+async function getPriceWithFallback(tokenAddr: string, forceRefresh: boolean = false): Promise<number | null> {
+    const now = Date.now();
+
+    if (!forceRefresh && priceCache[tokenAddr] && (now - priceCache[tokenAddr].timestamp) < CACHE_DURATION_MS) {
+        return priceCache[tokenAddr].price;
+    }
+
+    try {
+        const jupRes = await fetch(`https://api.jup.ag/price/v2?ids=${tokenAddr}`, {
+            headers: {
+                'x-api-key': process.env.JUPITER_API_KEY || ''
+            }
+        });
+
+        if (jupRes.status === 401) {
+            console.error("❌ Jupiter API Key is missing or invalid. Check your .env file.");
+        }
+
+        if (jupRes.ok) {
+            const jupData = await jupRes.json();
+            if (jupData.data && jupData.data[tokenAddr]) {
+                const price = parseFloat(jupData.data[tokenAddr].price);
+                priceCache[tokenAddr] = { price, timestamp: now };
+                return price;
+            }
+        }
+
+        console.log(`[PRICE] Jupiter missing data for ${tokenAddr.slice(0,4)}. Trying DexScreener...`);
+        const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddr}`);
+        const dexData = await dexRes.json();
+        
+        if (dexData.pairs && dexData.pairs.length > 0) {
+            const price = parseFloat(dexData.pairs[0].priceUsd);
+            priceCache[tokenAddr] = { price, timestamp: now };
+            return price;
+        }
+
+        return null;
+    } catch (e) {
+        console.error("[PRICE ERROR] Fetch failed:", e);
+        return null;
+    }
+}
 
 async function getTokenBalance(connection: Connection, wallet: PublicKey, mint: string): Promise<string> {
     try {
-        const accounts = await connection.getTokenAccountsByOwner(wallet, {
+        const accounts = await connection.getParsedTokenAccountsByOwner(wallet, {
             mint: new PublicKey(mint)
         });
         if (accounts.value.length === 0) return "0";
         
-        const balance = await connection.getTokenAccountBalance(accounts.value[0].pubkey);
-        return balance.value.amount;
+        return accounts.value[0].account.data.parsed.info.tokenAmount.amount;
     } catch (e) {
         return "0";
     }
@@ -24,26 +70,36 @@ export async function executeSwap(
     wallet: Keypair, 
     tokenAddr: string, 
     action: "BUY" | "SELL",
-    amount?: number,
-    isDryRun: boolean = false
+    isDryRun: boolean,
+    amount?: number
 ) {
-    const priceRes = await fetch(`https://api.jup.ag/price/v2?ids=${tokenAddr}`);
-    const priceData = await priceRes.json();
-    
-    if (!priceData.data[tokenAddr]) {
-        console.error(`[ERROR] Price data missing for ${tokenAddr}`);
-        return;
-    }
 
-    const currentPrice = parseFloat(priceData.data[tokenAddr].price);
-    const alertMessage = checkPriceAlert(currentPrice);
+    console.log(isDryRun ? `[DRY RUN]` : `[LIVE]`, `Initiating ${action} for token ${tokenAddr} with amount: ${amount || "ALL"}`);
 
-    if (alertMessage) {
-        console.log(`\x1b[33m%s\x1b[0m`, alertMessage);
-    }
+    const displayPrice = await getPriceWithFallback(tokenAddr);
 
     if (isDryRun) {
-        trackSimulatedTrade(tokenAddr, action, currentPrice, amount || 0);
+        console.log(`[DRY RUN] 🧪 Simulating ${action} @ ~$${displayPrice}`);
+        return "SIM_SIG";
+    }
+
+    console.log(`[LIVE] ⚠️ Initiating real trade...`);
+    const currentPrice = await getPriceWithFallback(tokenAddr, true); // <--- Add this flag
+
+    if (currentPrice === null) {
+        console.warn(`⚠️ [WARNING] Could not find price for ${tokenAddr}. Bot will continue with trade but PnL tracking will be paused.`);
+    }
+
+    if (currentPrice !== null) {
+        const alertMessage = checkPriceAlert(currentPrice);
+        if (alertMessage) console.log(`\x1b[33m%s\x1b[0m`, alertMessage);
+        if (isDryRun) trackSimulatedTrade(tokenAddr, action, currentPrice, amount || 0);
+    }
+
+    console.log(isDryRun ? `[DRY RUN]` : `[LIVE]`, `Preparing to ${action} at Market Price: $${currentPrice} for token ${tokenAddr}`);
+
+    if (isDryRun) {
+        trackSimulatedTrade(tokenAddr, action, currentPrice || 0, amount || 0);
         
         console.log(`[DRY RUN] 🧪 Simulated ${action} at Market Price: $${currentPrice}`);
         console.log(`[DRY RUN] Wallet: ${wallet.publicKey.toBase58().slice(0, 8)}...`);
@@ -68,47 +124,68 @@ export async function executeSwap(
             console.log(`[BUY] Attempting buy: ${amount} SOL (${swapAmount} lamports)`);
         }
 
-        const jupQuoteUrl = `https://lite-api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${swapAmount}&slippageBps=100`;
-        const jupRes = await fetch(jupQuoteUrl);
+        const jupQuoteUrl = `${JUP_SWAP_API_URL}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${swapAmount}&slippageBps=100&autoSlippage=true`;
+        console.log(`[JUPITER] Fetching quote from: ${jupQuoteUrl}`);
+    
+        const jupRes = await fetch(jupQuoteUrl, {
+            headers: {
+                'x-api-key': process.env.JUPITER_API_KEY || '' 
+            }
+        });
+
+        console.log(`[JUPITER] Quote response status: ${jupRes.status} ${jupRes.statusText}`);
         const jupData = await jupRes.json();
+        console.log(`[JUPITER] Quote fetched. Routes found: ${jupData.data?.length || 0}, Error: ${jupData.error || "None"}`);
+        console.log(jupData.errorCode ? `[JUPITER] Quote error code: ${jupData.errorCode}` : "[JUPITER] No errorsCode detected.");
 
         let swapTransaction: string | undefined;
-        if (jupData.error && jupData.errorCode === "TOKEN_NOT_TRADABLE") {
-            console.log("📍 Using Pump.fun curve route...");
-            const pumpSwapRes = await fetch(`${PUMP_API_URL}/pump-fun/swap`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    wallet: wallet.publicKey.toBase58(),
-                    type: action,
-                    mint: tokenAddr,
-                    inAmount: swapAmount,
-                    priorityFeeLevel: "high",
-                    slippageBps: 1000
-                })
-            });
 
-            const pumpData: any = await pumpSwapRes.json();
-            swapTransaction = pumpData.swapTransaction;
+        // if (jupData.error && jupData.errorCode === "TOKEN_NOT_TRADABLE") {
+        //     console.log("📍 Using Pump.fun curve route...");
+        //     const pumpSwapRes = await fetch(`${JUP_SWAP_API_URL}/swap`, {
+        //         method: 'POST',
+        //         headers: { 'Content-Type': 'application/json' },
+        //         body: JSON.stringify({
+        //             wallet: wallet.publicKey.toBase58(),
+        //             type: action,
+        //             mint: tokenAddr,
+        //             inAmount: swapAmount,
+        //             priorityFeeLevel: "high",
+        //             slippageBps: 1000
+        //         })
+        //     });
+
+        //     console.log(`[PUMP.FUN] Swap response status: ${pumpSwapRes.status} ${pumpSwapRes.statusText}`);
+
+        //     const pumpData: any = await pumpSwapRes.json();
+        //     swapTransaction = pumpData.swapTransaction;
             
-            if (!swapTransaction) {
-                throw new Error(`Pump.fun API failed to return a transaction. Error: ${JSON.stringify(pumpData)}`);
-            }
-        } else {
+        //     if (!swapTransaction) {
+        //         throw new Error(`Pump.fun API failed to return a transaction. Error: ${JSON.stringify(pumpData)}`);
+        //     }
+        // } else {
             console.log("🚀 Using Jupiter Raydium path...");
-            const jupSwapRes = await fetch('https://lite-api.jup.ag/swap/v1/swap', {
+
+            const jupSwapRes = await fetch(`${JUP_SWAP_API_URL}/swap`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'x-api-key': process.env.JUPITER_API_KEY || ''
+                },
                 body: JSON.stringify({
                     quoteResponse: jupData,
                     userPublicKey: wallet.publicKey.toBase58(),
-                    wrapAndUnwrapSol: true
+                    wrapAndUnwrapSol: true,
+                    dynamicComputeUnitLimit: true,
+                    prioritizationFeeLamports: 'auto'
                 })
             });
 
+            console.log(`[JUPITER] Swap response status: ${jupSwapRes.status} ${jupSwapRes.statusText}`);
+
             const jupSwapData: any = await jupSwapRes.json();
             swapTransaction = jupSwapData.swapTransaction;
-        }
+        // }
 
         if (!swapTransaction) {
             throw new Error("Critical: Transaction data is undefined. Skipping execution.");
@@ -119,13 +196,13 @@ export async function executeSwap(
         
         const signature = await connection.sendRawTransaction(transaction.serialize(), { 
             skipPreflight: true,
-            maxRetries: 3 
+            maxRetries: 2
         });
         
-        console.log(`✅ ${action} Successful: https://solscan.io/tx/${signature}`);
+        console.log(`✅ ${action} Success: https://solscan.io/tx/${signature}`);
         return signature;
 
     } catch (error: any) {
-        console.error(`[ERROR] ${action} Failed:`, error.message || error);
+        console.error(`[ERROR] ${action} Failed:`, error.message);
     }
 }
