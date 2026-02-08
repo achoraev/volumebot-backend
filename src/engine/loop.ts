@@ -32,7 +32,7 @@ export async function runVolumeLoop(wallet: Keypair, token: string, settings: an
                     throw new Error("Invalid Buy Amount: Calculations resulted in NaN. Check settings keys.");
                 }
 
-                console.log(`[LOOP] Step ${buyCount + 1}/${targetBuys}: BUY ${finalAmount} SOL`);
+                console.log(`[LOOP] Step ${buyCount + 1}/${targetBuys}: BUY ${finalAmount} SOL from wallet: ${wallet.publicKey.toBase58()}`);
                 await executeSwap(connection, wallet, token, "BUY", dryRun, finalAmount);
                 buyCount++;
             } else {
@@ -62,7 +62,7 @@ export async function runVolumeLoop(wallet: Keypair, token: string, settings: an
             
             console.log(`[WAIT] Sleeping for ${delay / 1000}s...`);
 
-            await sleepWithAbort(delay * 1000, signal);
+            await sleepWithAbort(delay, signal);
 
             await new Promise((resolve, reject) => {
                 const timer = setTimeout(resolve, delay);

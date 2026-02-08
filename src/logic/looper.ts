@@ -40,7 +40,6 @@ export const startVolumeLoop = (tokenAddress: string, settings: any) => {
 
 export const stopVolumeLoop = (tokenAddress: string) => {
     const controller = abortControllers.get(tokenAddress);
-    console.log(controller + " controller")
     if (controller) {
         console.log(`[STOP] Requesting abort for ${tokenAddress}...`);
         controller.abort(); 

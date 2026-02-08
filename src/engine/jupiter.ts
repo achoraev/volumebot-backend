@@ -1,6 +1,7 @@
 import { Connection, Keypair, VersionedTransaction, PublicKey } from "@solana/web3.js";
 import fetch from "cross-fetch";
 import { trackSimulatedTrade, checkPriceAlert } from "../logic/tracker";
+import { executeRaydiumDirectSwap } from './raydium';
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_SWAP_API_URL = "https://api.jup.ag/swap/v1";
@@ -35,10 +36,10 @@ async function getPriceWithFallback(tokenAddr: string, forceRefresh: boolean = f
             }
         }
 
-        console.log(`[PRICE] Jupiter missing data for ${tokenAddr.slice(0,4)}. Trying DexScreener...`);
+        console.log(`[PRICE] Jupiter missing data for ${tokenAddr.slice(0, 4)}. Trying DexScreener...`);
         const dexRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddr}`);
         const dexData = await dexRes.json();
-        
+
         if (dexData.pairs && dexData.pairs.length > 0) {
             const price = parseFloat(dexData.pairs[0].priceUsd);
             priceCache[tokenAddr] = { price, timestamp: now };
@@ -58,7 +59,7 @@ async function getTokenBalance(connection: Connection, wallet: PublicKey, mint: 
             mint: new PublicKey(mint)
         });
         if (accounts.value.length === 0) return "0";
-        
+
         return accounts.value[0].account.data.parsed.info.tokenAmount.amount;
     } catch (e) {
         return "0";
@@ -66,9 +67,9 @@ async function getTokenBalance(connection: Connection, wallet: PublicKey, mint: 
 }
 
 export async function executeSwap(
-    connection: Connection, 
-    wallet: Keypair, 
-    tokenAddr: string, 
+    connection: Connection,
+    wallet: Keypair,
+    tokenAddr: string,
     action: "BUY" | "SELL",
     isDryRun: boolean,
     amount?: number
@@ -84,7 +85,7 @@ export async function executeSwap(
     }
 
     console.log(`[LIVE] ⚠️ Initiating real trade...`);
-    const currentPrice = await getPriceWithFallback(tokenAddr, true); // <--- Add this flag
+    const currentPrice = await getPriceWithFallback(tokenAddr, true);
 
     if (currentPrice === null) {
         console.warn(`⚠️ [WARNING] Could not find price for ${tokenAddr}. Bot will continue with trade but PnL tracking will be paused.`);
@@ -100,13 +101,14 @@ export async function executeSwap(
 
     if (isDryRun) {
         trackSimulatedTrade(tokenAddr, action, currentPrice || 0, amount || 0);
-        
+
         console.log(`[DRY RUN] 🧪 Simulated ${action} at Market Price: $${currentPrice}`);
         console.log(`[DRY RUN] Wallet: ${wallet.publicKey.toBase58().slice(0, 8)}...`);
-        
+
         await new Promise(r => setTimeout(r, 1000));
-        
-        return "SIM_SIG_" + Math.random().toString(36).slice(2);    }
+
+        return "SIM_SIG_" + Math.random().toString(36).slice(2);
+    }
 
     try {
         let inputMint = action === "BUY" ? SOL_MINT : tokenAddr;
@@ -115,77 +117,58 @@ export async function executeSwap(
 
         if (action === "SELL") {
             swapAmount = await getTokenBalance(connection, wallet.publicKey, tokenAddr);
-            if (swapAmount === "0" || swapAmount === "undefined") throw new Error("No tokens found to sell.");
+            if (!swapAmount || swapAmount === "0") throw new Error("No tokens found to sell.");
             console.log(`[SELL] Selling all tokens (${swapAmount} raw units)...`);
         } else {
             const lamports = Math.floor(amount! * 1_000_000_000);
             swapAmount = lamports.toString();
-            
+
             console.log(`[BUY] Attempting buy: ${amount} SOL (${swapAmount} lamports)`);
         }
 
-        const jupQuoteUrl = `${JUP_SWAP_API_URL}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${swapAmount}&slippageBps=100&autoSlippage=true`;
+        const jupQuoteUrl = `${JUP_SWAP_API_URL}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${swapAmount}&slippageBps=100`;
         console.log(`[JUPITER] Fetching quote from: ${jupQuoteUrl}`);
-    
-        const jupRes = await fetch(jupQuoteUrl, {
-            headers: {
-                'x-api-key': process.env.JUPITER_API_KEY || '' 
-            }
-        });
+
+        const jupRes = await fetch(jupQuoteUrl, { headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' } });
 
         console.log(`[JUPITER] Quote response status: ${jupRes.status} ${jupRes.statusText}`);
         const jupData = await jupRes.json();
         console.log(`[JUPITER] Quote fetched. Routes found: ${jupData.data?.length || 0}, Error: ${jupData.error || "None"}`);
         console.log(jupData.errorCode ? `[JUPITER] Quote error code: ${jupData.errorCode}` : "[JUPITER] No errorsCode detected.");
 
+        // Raydium Direct Fallback for non-tradable tokens or zero routes
+        if (jupRes.status === 400) {
+            console.log(`[JUPITER] Quote error details: ${JSON.stringify(jupData)}`);
+
+            if (jupData.errorCode === "TOKEN_NOT_TRADABLE" || jupData.error === "Routes found: 0") {
+                console.log("🚀 Jupiter: Token not tradable. Falling back to Raydium Direct...");
+                return await executeRaydiumDirectSwap(connection, wallet, tokenAddr, action, parseInt(swapAmount));
+            }
+        }
+
         let swapTransaction: string | undefined;
 
-        // if (jupData.error && jupData.errorCode === "TOKEN_NOT_TRADABLE") {
-        //     console.log("📍 Using Pump.fun curve route...");
-        //     const pumpSwapRes = await fetch(`${JUP_SWAP_API_URL}/swap`, {
-        //         method: 'POST',
-        //         headers: { 'Content-Type': 'application/json' },
-        //         body: JSON.stringify({
-        //             wallet: wallet.publicKey.toBase58(),
-        //             type: action,
-        //             mint: tokenAddr,
-        //             inAmount: swapAmount,
-        //             priorityFeeLevel: "high",
-        //             slippageBps: 1000
-        //         })
-        //     });
+        console.log("🚀 Using Jupiter Raydium path...");
 
-        //     console.log(`[PUMP.FUN] Swap response status: ${pumpSwapRes.status} ${pumpSwapRes.statusText}`);
+        const jupSwapRes = await fetch(`${JUP_SWAP_API_URL}/swap`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': process.env.JUPITER_API_KEY || ''
+            },
+            body: JSON.stringify({
+                quoteResponse: jupData,
+                userPublicKey: wallet.publicKey.toBase58(),
+                wrapAndUnwrapSol: true,
+                dynamicComputeUnitLimit: true,
+                prioritizationFeeLamports: 'auto'
+            })
+        });
 
-        //     const pumpData: any = await pumpSwapRes.json();
-        //     swapTransaction = pumpData.swapTransaction;
-            
-        //     if (!swapTransaction) {
-        //         throw new Error(`Pump.fun API failed to return a transaction. Error: ${JSON.stringify(pumpData)}`);
-        //     }
-        // } else {
-            console.log("🚀 Using Jupiter Raydium path...");
+        console.log(`[JUPITER] Swap response status: ${jupSwapRes.status} ${jupSwapRes.statusText}`);
 
-            const jupSwapRes = await fetch(`${JUP_SWAP_API_URL}/swap`, {
-                method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'x-api-key': process.env.JUPITER_API_KEY || ''
-                },
-                body: JSON.stringify({
-                    quoteResponse: jupData,
-                    userPublicKey: wallet.publicKey.toBase58(),
-                    wrapAndUnwrapSol: true,
-                    dynamicComputeUnitLimit: true,
-                    prioritizationFeeLamports: 'auto'
-                })
-            });
-
-            console.log(`[JUPITER] Swap response status: ${jupSwapRes.status} ${jupSwapRes.statusText}`);
-
-            const jupSwapData: any = await jupSwapRes.json();
-            swapTransaction = jupSwapData.swapTransaction;
-        // }
+        const jupSwapData: any = await jupSwapRes.json();
+        swapTransaction = jupSwapData.swapTransaction;
 
         if (!swapTransaction) {
             throw new Error("Critical: Transaction data is undefined. Skipping execution.");
@@ -193,12 +176,12 @@ export async function executeSwap(
 
         const transaction = VersionedTransaction.deserialize(Buffer.from(swapTransaction, 'base64'));
         transaction.sign([wallet]);
-        
-        const signature = await connection.sendRawTransaction(transaction.serialize(), { 
+
+        const signature = await connection.sendRawTransaction(transaction.serialize(), {
             skipPreflight: true,
             maxRetries: 2
         });
-        
+
         console.log(`✅ ${action} Success: https://solscan.io/tx/${signature}`);
         return signature;
 
