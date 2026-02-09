@@ -34,4 +34,29 @@ export async function getAllBalances() {
     }));
 }
 
+export const getRandomWallet = (): Keypair => {
+    try {
+        const filePath = path.join(process.cwd(), "wallets.json");
+        const data = fs.readFileSync(filePath, 'utf8');
+        const privateKeys = JSON.parse(data);
+
+        if (!Array.isArray(privateKeys) || privateKeys.length === 0) {
+            throw new Error("wallets.json is empty or invalid (must be an array).");
+        }
+
+        const randomIndex = Math.floor(Math.random() * privateKeys.length);
+        const randomKey = privateKeys[randomIndex];
+
+        console.log(`✅ Loaded random wallet: ${randomKey.publicKey}`);
+
+        return Keypair.fromSecretKey(bs58.decode(randomKey.secretKey));
+    } catch (error: any) {
+        console.error("❌ Failed to load random wallet:", error.message + (error.stack ? "\n" + error.stack : ""));
+
+        const workerKey = process.env.MAIN_PRIVATE_KEY;
+        if (workerKey) return Keypair.fromSecretKey(bs58.decode(workerKey));
+        throw new Error("No valid wallet found in wallets.json or .env");
+    }
+};
+
 export {};

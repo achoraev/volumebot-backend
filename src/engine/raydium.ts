@@ -1,19 +1,10 @@
-import { Connection, Keypair, VersionedTransaction, LAMPORTS_PER_SOL, PublicKey } from '@solana/web3.js';
+import { Connection, Keypair, VersionedTransaction } from '@solana/web3.js';
 import axios from 'axios';
+import { checkBalance } from './utils';
 
 const RAYDIUM_API_BASE = "https://transaction-v1.raydium.io";
 const MAX_RETRIES = 3;
 const INITIAL_SLIPPAGE = 100; // 1%
-const SAFETY_BUFFER = 0.01 * LAMPORTS_PER_SOL; // 0.01 SOL for fees/rent
-
-async function checkBalance(connection: Connection, publicKey: PublicKey, requiredLamports: number) {
-    const balance = await connection.getBalance(publicKey);
-    const totalNeeded = requiredLamports + SAFETY_BUFFER;
-    
-    if (balance < totalNeeded) {
-        throw new Error(`Insufficient SOL. Balance: ${(balance / LAMPORTS_PER_SOL).toFixed(4)}, Needed: ${(totalNeeded / LAMPORTS_PER_SOL).toFixed(4)}`);
-    }
-}
 
 export async function executeRaydiumDirectSwap(
     connection: Connection,
