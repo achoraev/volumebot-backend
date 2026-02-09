@@ -2,6 +2,7 @@ import { Connection, Keypair, VersionedTransaction, PublicKey } from "@solana/we
 import fetch from "cross-fetch";
 import { trackSimulatedTrade, checkPriceAlert } from "../logic/tracker";
 import { executeRaydiumDirectSwap } from './raydium';
+import { executePumpSwap } from './pump';
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_SWAP_API_URL = "https://api.jup.ag/swap/v1";
@@ -28,6 +29,7 @@ async function getPriceWithFallback(tokenAddr: string, forceRefresh: boolean = f
         }
 
         if (jupRes.ok) {
+            console.log(jupRes.status === 200 ? `[PRICE] Jupiter price fetched for ${tokenAddr.slice(0, 4)}...` : `[PRICE] Jupiter price fetch failed with status ${jupRes.status} for ${tokenAddr.slice(0, 4)}...`);
             const jupData = await jupRes.json();
             if (jupData.data && jupData.data[tokenAddr]) {
                 const price = parseFloat(jupData.data[tokenAddr].price);
@@ -127,16 +129,14 @@ export async function executeSwap(
         }
 
         const jupQuoteUrl = `${JUP_SWAP_API_URL}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${swapAmount}&slippageBps=100`;
-        console.log(`[JUPITER] Fetching quote from: ${jupQuoteUrl}`);
+        console.log(`[JUPITER] Fetching quote from Jupiter...`);
 
         const jupRes = await fetch(jupQuoteUrl, { headers: { 'x-api-key': process.env.JUPITER_API_KEY || '' } });
 
         console.log(`[JUPITER] Quote response status: ${jupRes.status} ${jupRes.statusText}`);
         const jupData = await jupRes.json();
         console.log(`[JUPITER] Quote fetched. Routes found: ${jupData.data?.length || 0}, Error: ${jupData.error || "None"}`);
-        console.log(jupData.errorCode ? `[JUPITER] Quote error code: ${jupData.errorCode}` : "[JUPITER] No errorsCode detected.");
 
-        // Raydium Direct Fallback for non-tradable tokens or zero routes
         if (jupRes.status === 400) {
             console.log(`[JUPITER] Quote error details: ${JSON.stringify(jupData)}`);
 
@@ -187,5 +187,9 @@ export async function executeSwap(
 
     } catch (error: any) {
         console.error(`[ERROR] ${action} Failed:`, error.message);
+        if (error.message.includes("ROUTE_NOT_FOUND")) {
+            console.log("📍 Raydium pool not found. Final fallback: Pump.fun Bonding Curve...");
+            return await executePumpSwap(connection, wallet, tokenAddr, action, amount || 0);
+        }
     }
 }

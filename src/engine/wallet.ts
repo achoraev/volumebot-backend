@@ -1,7 +1,7 @@
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import fs from "fs";
-import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Connection, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import path from "path";
 
 export async function loadWallets(): Promise<Keypair[]> {
