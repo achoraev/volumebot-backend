@@ -61,22 +61,23 @@ export async function executeSwap(
         const input = action === "BUY" ? SOL_MINT : tokenAddr;
         const output = action === "BUY" ? tokenAddr : SOL_MINT;
 
-        // 3. TRY JUPITER (Primary)
-        console.log(`[SWAP] Checking Jupiter for ${tokenAddr.slice(0, 6)}...`);
-        const jupTx = await getJupiterSwapTx(walletAddr, input, output, swapAmountLamports);
+        // // 3. TRY JUPITER (Primary)
+        // console.log(`[SWAP] Checking Jupiter for ${tokenAddr.slice(0, 6)}...`);
+        // const jupTx = await getJupiterSwapTx(walletAddr, input, output, swapAmountLamports);
 
-        if (jupTx) {
-            const transaction = VersionedTransaction.deserialize(Buffer.from(jupTx, 'base64'));
-            transaction.sign([wallet]);
-            const sig = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true });
-            console.log(`✅ Jupiter Success: ${sig}`);
-            return sig;
-        }
+        // if (jupTx) {
+        //     const transaction = VersionedTransaction.deserialize(Buffer.from(jupTx, 'base64'));
+        //     transaction.sign([wallet]);
+        //     const sig = await connection.sendRawTransaction(transaction.serialize(), { skipPreflight: true });
+        //     console.log(`✅ Jupiter Success: ${sig}`);
+        //     return sig;
+        // }
 
-        // 4. FALLBACK TO RAYDIUM
-        console.log("🚀 Jupiter unavailable. Trying Raydium Direct...");
-        return await executeRaydiumDirectSwap(connection, wallet, tokenAddr, action, parseInt(swapAmountLamports));
+        // // 4. FALLBACK TO RAYDIUM
+        // console.log("🚀 Jupiter unavailable. Trying Raydium Direct...");
+        // return await executeRaydiumDirectSwap(connection, wallet, tokenAddr, action, parseInt(swapAmountLamports));
 
+        throw new Error("ROUTE_NOT_FOUND");
     } catch (error: any) {
         // 5. FINAL FALLBACK TO PUMP.FUN
         if (error.message.includes("ROUTE_NOT_FOUND") || error.message.includes("TOKEN_NOT_TRADABLE")) {

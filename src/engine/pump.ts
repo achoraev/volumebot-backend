@@ -6,11 +6,13 @@ export async function executePumpSwap(
     wallet: Keypair,
     mint: string,
     action: "BUY" | "SELL",
-    amount: number, // SOL for BUY, Token Amount for SELL
+    amount: number | string,
     slippage: number = 10 // PumpPortal uses actual percentage (e.g., 10 for 10%)
 ) {
     try {
         console.log(`[PUMP] Initiating ${action} for ${mint}...`);
+
+        const finalAmount = action === "SELL" ? "100%" : amount;
 
         const response = await fetch(`https://pumpportal.fun/api/trade-local`, {
             method: "POST",
@@ -19,7 +21,7 @@ export async function executePumpSwap(
                 publicKey: wallet.publicKey.toBase58(),
                 action: action.toLowerCase(), // "buy" or "sell"
                 mint: mint,
-                amount: amount,
+                amount: finalAmount,
                 denominatedInSol: action === "BUY" ? "true" : "false",
                 slippage: slippage, 
                 priorityFee: 0.0005, // Tip for faster landing
@@ -33,8 +35,6 @@ export async function executePumpSwap(
         }
 
         console.log(`[PUMP] Response status: ${response.status} ${response.statusText}`);
-
-        // to here
 
         const arrayBuffer = await response.arrayBuffer();
         const txBuffer = Buffer.from(arrayBuffer);
