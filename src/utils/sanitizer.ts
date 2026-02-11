@@ -3,6 +3,9 @@ export function sanitizeSettings(rawSettings: any) {
         minAmount: parseFloat(rawSettings.minAmmount || rawSettings.minAmount || 0.01),
         maxAmount: parseFloat(rawSettings.maxAmmount || rawSettings.maxAmount || 0.02),
         
+        targetMakers: rawSettings.targetMakers || 10,
+        batchSize: rawSettings.batchSize || 10,
+
         minBuys: Math.max(1, parseInt(rawSettings.minBuys || 1)),
         maxBuys: Math.max(1, parseInt(rawSettings.maxBuys || 3)),
         

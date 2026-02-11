@@ -10,9 +10,8 @@ export async function executePumpSwap(
     slippage: number = 10 // PumpPortal uses actual percentage (e.g., 10 for 10%)
 ) {
     try {
-        console.log(`[PUMP] Initiating ${action} for ${mint}...`);
-
         const finalAmount = action === "SELL" ? "100%" : amount;
+        console.log(`[PUMP] Initiating ${action} for ${mint}... Amount: ${finalAmount} ${action === "BUY" ? "SOL" : "tokens"}, Slippage: ${slippage}%`);
 
         const response = await fetch(`https://pumpportal.fun/api/trade-local`, {
             method: "POST",
@@ -32,6 +31,13 @@ export async function executePumpSwap(
         if (!response.ok) {
             const text = await response.text();
             throw new Error(`PumpPortal API Error (${response.status}): ${text}`);
+        }
+
+        const solBalance = await connection.getBalance(wallet.publicKey);
+
+        if (solBalance < 5000) {
+            console.log(`⚠️  [RECLAIM] Insufficient SOL balance for ${wallet.publicKey.toBase58().slice(0, 6)} to make a sale. Skipping...`);
+            return null;
         }
 
         console.log(`[PUMP] Response status: ${response.status} ${response.statusText}`);

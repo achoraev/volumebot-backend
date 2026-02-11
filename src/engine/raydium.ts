@@ -1,6 +1,6 @@
 import { Connection, Keypair, VersionedTransaction } from '@solana/web3.js';
 import axios from 'axios';
-import { checkBalance } from './utils';
+import { checkBalance } from '../utils/utils';
 
 const RAYDIUM_API_BASE = "https://transaction-v1.raydium.io";
 const MAX_RETRIES = 3;

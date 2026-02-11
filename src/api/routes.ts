@@ -1,10 +1,15 @@
 import e, { Router, Request, Response } from 'express';
-import { PublicKey } from '@solana/web3.js';
-import { startVolumeLoop, stopVolumeLoop } from '../logic/looper';
+import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { stopVolumeLoop } from '../logic/looper';
 import { getAllBalances } from '../engine/wallet';
-import { distributeFunds, withdrawAll } from '../logic/distributor';
 import { getStats } from '../logic/tracker';
 import { sanitizeSettings } from '../utils/sanitizer';
+import path from 'path';
+import { startMakerCampaign } from '../engine/batch';
+import { distributeFunds, withdrawAll } from '../engine/wallet';
+
+const SUB_WALLETS_PATH = path.join(process.cwd(), "sub-wallets.json");
+const connection = new Connection("https://api.mainnet-beta.solana.com");
 
 const router = Router();
 
@@ -42,6 +47,7 @@ router.post('/start-bot', async (req: Request, res: Response) => {
     const { tokenAddress, settings: rawSettings } = req.body;
 
     if (!tokenAddress) {
+        console.warn("[API] Start Bot failed: No token address provided");
         return res.status(400).json({ error: "Token address required" });
     }
 
@@ -53,13 +59,16 @@ router.post('/start-bot', async (req: Request, res: Response) => {
 
     const settings = sanitizeSettings(rawSettings);
 
+    console.log( `[API] Starting bot for ${tokenAddress} with settings:`, settings);
+
     try {
-        startVolumeLoop(tokenAddress, settings);
-        console.log(`[API] Bot started for ${tokenAddress} with settings:`, settings);
+        startMakerCampaign(tokenAddress, settings).catch(err => console.error("Campaign failed:", err));
         res.json({ message: "Bot started successfully!", settings });
     } catch (err) {
         res.status(500).json({ error: "Failed to start bot" });
     }
+
+    console.log(`[API] Bot started for ${tokenAddress} with settings:`, settings);
 });
 
 /**
@@ -104,5 +113,32 @@ router.post('/withdraw', async (req: Request, res: Response) => {
         res.status(500).json({ error: "Withdrawal failed" });
     }
 });
+
+// router.get('/active-makers', async (req, res) => {
+//     try {
+//         if (!fs.existsSync(SUB_WALLETS_PATH)) {
+//             return res.json([]);
+//         }
+
+//         const data = JSON.parse(fs.readFileSync(SUB_WALLETS_PATH, 'utf-8'));
+        
+//         const walletsWithBalances = await Promise.all(data.map(async (w: any) => {
+//             try {
+//                 const balance = await connection.getBalance(new PublicKey(w.pubkey));
+//                 return {
+//                     pubkey: w.pubkey,
+//                     balance: (balance / LAMPORTS_PER_SOL).toFixed(4),
+//                     status: balance > 0 ? "Active" : "Empty"
+//                 };
+//             } catch (e) {
+//                 return { pubkey: w.pubkey, balance: "0.0000", status: "Error" };
+//             }
+//         }));
+
+//         res.json(walletsWithBalances);
+//     } catch (error) {
+//         res.status(500).json({ error: "Failed to fetch maker stats" });
+//     }
+// });
 
 export default router;

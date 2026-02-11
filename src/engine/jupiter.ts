@@ -1,9 +1,8 @@
-import { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
+import { Connection, Keypair } from "@solana/web3.js";
 import fetch from "cross-fetch";
 import { trackSimulatedTrade } from "../logic/tracker";
-import { executeRaydiumDirectSwap } from './raydium';
 import { executePumpSwap } from './pump';
-import { getPriceWithFallback, getTokenBalance } from "./utils";
+import { getPriceWithFallback, getTokenBalance } from "../utils/utils";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_SWAP_API_URL = "https://api.jup.ag/swap/v1";
@@ -81,7 +80,7 @@ export async function executeSwap(
     } catch (error: any) {
         // 5. FINAL FALLBACK TO PUMP.FUN
         if (error.message.includes("ROUTE_NOT_FOUND") || error.message.includes("TOKEN_NOT_TRADABLE")) {
-            console.log("📍 Raydium/Jup failed. Final fallback: PumpPortal...");
+            // console.log("📍 Raydium/Jup failed. Final fallback: PumpPortal...");
             return await executePumpSwap(connection, wallet, tokenAddr, action, amount || 0);
         }
         throw error;

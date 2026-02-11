@@ -6,6 +6,7 @@
 .pnp.js
 /dist
 wallets.json
+sub-wallets.json
 
 # testing
 /coverage

@@ -8,6 +8,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.73.0",
     "axios": "^1.13.5",
     "bs58": "^5.0.0",
