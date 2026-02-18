@@ -3,36 +3,47 @@ import { runVolumeLoop } from '../engine/loop';
 export const activeBots = new Map<string, boolean>();
 const abortControllers = new Map<string, AbortController>();
 
-export const startVolumeLoop = async (tokenAddress: string, settings: any) => {
+export const startVolumeLoop = (tokenAddress: string, settings: any) => {
     if (activeBots.get(tokenAddress)) return;
 
-    console.log(`[SYSTEM] Starting Bot for ${tokenAddress}`);
-    console.log(`[MODE] ${settings.dryRun ? "🧪 DRY RUN ENABLED (Simulated)" : "⚠️ LIVE TRADING ENABLED (Real SOL)"}`);
+    let makersCreated = 0;
 
-    const controller = new AbortController();
-    abortControllers.set(tokenAddress, controller);
-    activeBots.set(tokenAddress, true);
-    
-    runVolumeLoop(tokenAddress, settings, controller.signal)
-        .catch((err) => {
+    console.log(`🚀 [BATCH] Starting maker campaign for ${tokenAddress} with ${settings.targetMakers} makers.`);
+    while (makersCreated < settings.targetMakers) {
+
+        console.log(`[MODE] ${settings.dryRun ? "🧪 DRY RUN ENABLED (Simulated)" : "⚠️ LIVE TRADING ENABLED (Real SOL)"}`);
+
+        const controller = new AbortController();
+        abortControllers.set(tokenAddress, controller);
+        activeBots.set(tokenAddress, true);
+
+        try {
+            makersCreated++;
+            runVolumeLoop(tokenAddress, settings, controller.signal);
+            console.log(`✅ [BATCH] Total Makers hit: ${makersCreated}/${settings.targetMakers}`);
+        } catch (err: any) {
             if (err.name === 'AbortError') {
                 console.log(`[STOP] ${tokenAddress} loop aborted.`);
+                break; // Exit the loop if aborted
             } else {
                 console.error(`[LOOP ERROR] ${err.message}`);
+                break;
             }
-        })
-        .finally(() => {
+        } finally {
             activeBots.delete(tokenAddress);
             abortControllers.delete(tokenAddress);
             console.log(`[CLEANUP] Bot state cleared for ${tokenAddress}`);
-        });
+        }
+    }
+
+    console.log("🏁 [BATCH] Target makers reached.");
 };
 
 export const stopVolumeLoop = (tokenAddress: string) => {
     const controller = abortControllers.get(tokenAddress);
     if (controller) {
         console.log(`[STOP] Requesting abort for ${tokenAddress}...`);
-        controller.abort(); 
+        controller.abort();
     }
     activeBots.set(tokenAddress, false);
 };

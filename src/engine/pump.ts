@@ -11,7 +11,7 @@ export async function executePumpSwap(
 ) {
     try {
         const finalAmount = action === "SELL" ? "100%" : amount;
-        console.log(`[PUMP] Initiating ${action} for ${mint}... Amount: ${finalAmount} ${action === "BUY" ? "SOL" : "tokens"}, Slippage: ${slippage}%`);
+        console.log(`[PUMP] Initiating ${action} for token ${mint} Amount: ${finalAmount} ${action === "BUY" ? "SOL" : "tokens"}, Slippage: ${slippage}%`);
 
         const response = await fetch(`https://pumpportal.fun/api/trade-local`, {
             method: "POST",
@@ -36,11 +36,9 @@ export async function executePumpSwap(
         const solBalance = await connection.getBalance(wallet.publicKey);
 
         if (solBalance < 5000) {
-            console.log(`⚠️  [RECLAIM] Insufficient SOL balance for ${wallet.publicKey.toBase58().slice(0, 6)} to make a sale. Skipping...`);
+            console.log(`⚠️  [RECLAIM] Insufficient SOL balance for ${wallet.publicKey.toBase58()} to make a sale. Skipping...`);
             return null;
         }
-
-        console.log(`[PUMP] Response status: ${response.status} ${response.statusText}`);
 
         const arrayBuffer = await response.arrayBuffer();
         const txBuffer = Buffer.from(arrayBuffer);
@@ -55,8 +53,6 @@ export async function executePumpSwap(
         tx.message.recentBlockhash = blockhash;
         
         tx.sign([wallet]);
-
-        console.log(`[PUMP] Transaction signed. Sending to network...`);
 
         const signature = await connection.sendRawTransaction(tx.serialize(), { 
             skipPreflight: true,

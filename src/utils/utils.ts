@@ -1,5 +1,6 @@
-import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import fetch from "cross-fetch";
+import bs58 from "bs58";
 
 const CACHE_DURATION_MS = 10 * 1000;
 const priceCache: Record<string, { price: number; timestamp: number }> = {};
@@ -48,6 +49,7 @@ export async function getTokenBalance(connection: Connection, wallet: PublicKey,
         if (accounts.value.length === 0) return "0";
         return accounts.value[0].account.data.parsed.info.tokenAmount.amount;
     } catch (e) {
+        console.error("[UTILS ERROR] Failed to get token balance:", e);
         return "0";
     }
 }
@@ -105,3 +107,12 @@ export const sleepWithAbort = (ms: number, signal: AbortSignal) => {
         }, { once: true });
     });
 };
+
+export function getMainWallet(): Keypair {
+    try {
+        const mainWallet = Keypair.fromSecretKey(bs58.decode(process.env.MAIN_PRIVATE_KEY!));
+        return mainWallet;
+    } catch (e) {
+        throw new Error("Failed to load Main Wallet: Invalid private key");
+    }
+}

@@ -1,12 +1,12 @@
 import e, { Router, Request, Response } from 'express';
 import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { stopVolumeLoop } from '../logic/looper';
+import { startVolumeLoop, stopVolumeLoop } from '../logic/looper';
 import { getAllBalances } from '../engine/wallet';
 import { getStats } from '../logic/tracker';
 import { sanitizeSettings } from '../utils/sanitizer';
 import path from 'path';
-import { startMakerCampaign } from '../engine/batch';
 import { distributeFunds, withdrawAll } from '../engine/wallet';
+import { buyHolders } from '../engine/holders';
 
 const SUB_WALLETS_PATH = path.join(process.cwd(), "sub-wallets.json");
 const connection = new Connection("https://api.mainnet-beta.solana.com");
@@ -59,16 +59,16 @@ router.post('/start-bot', async (req: Request, res: Response) => {
 
     const settings = sanitizeSettings(rawSettings);
 
-    console.log( `[API] Starting bot for ${tokenAddress} with settings:`, settings);
+    console.log(`[API] Starting bot for ${tokenAddress} with settings:`, settings);
 
     try {
-        startMakerCampaign(tokenAddress, settings).catch(err => console.error("Campaign failed:", err));
+        startVolumeLoop(tokenAddress, settings);
         res.json({ message: "Bot started successfully!", settings });
     } catch (err) {
         res.status(500).json({ error: "Failed to start bot" });
     }
 
-    console.log(`[API] Bot started for ${tokenAddress} with settings:`, settings);
+    console.log(`[API] Bot started for ${tokenAddress}`);
 });
 
 /**
@@ -111,6 +111,15 @@ router.post('/withdraw', async (req: Request, res: Response) => {
         res.json({ message: "All funds swept to Main Wallet" });
     } catch (err) {
         res.status(500).json({ error: "Withdrawal failed" });
+    }
+});
+
+router.post('/holders', async (req: Request, res: Response) => {
+    try {
+        await buyHolders(req.body.tokenAddress, req.body.amount);
+        res.json({ message: "Holder buys executed successfully!" });
+    } catch (err) {
+        res.status(500).json({ error: "Failed to execute holder buys" });
     }
 });
 

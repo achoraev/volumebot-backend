@@ -24,14 +24,13 @@ export const reclaimAllTokensAndSol = async (connection: Connection, mainWallet:
     }
 
     const subWalletsData = JSON.parse(fs.readFileSync(SUB_WALLETS_PATH, 'utf-8'));
-    const mintPubkey = new PublicKey(tokenMint);
 
     console.log(`[RECLAIM] Starting reclaim for ${subWalletsData.length} wallets...`);
 
     for (const wallet of subWalletsData) {
-        await reclaimAllTokensAndSolPerWallet(wallet, connection, tokenMint, signal);
+        await reclaimAllTokensPerWallet(connection, wallet, mainWallet, tokenMint);
         await sleepWithAbort(2000, signal);
-        await reclaimAllFundsFromWallet(connection, mainWallet, wallet);
+        await reclaimAllSolFromWallet(connection, mainWallet, wallet);
         console.log(`♻️ Fully Reclaimed: ${wallet.publicKey.toBase58().slice(0, 6)}`);
     }
 
@@ -39,22 +38,18 @@ export const reclaimAllTokensAndSol = async (connection: Connection, mainWallet:
 };
 
 
-export async function reclaimAllTokensAndSolPerWallet(wallet: any, connection: Connection, tokenMint: string, signal: AbortSignal) {
+export async function reclaimAllTokensPerWallet(connection: Connection, wallet: Keypair, mainWallet: Keypair, tokenMint: string) {
     try {
-        const subKp = Keypair.fromSecretKey(bs58.decode(wallet.secretKey));
-        const ata = await getAssociatedTokenAddress(new PublicKey(tokenMint), subKp.publicKey);
+        
+        const ata = await getAssociatedTokenAddress(new PublicKey(tokenMint), wallet.publicKey);
         const tokenBalance = await connection.getTokenAccountBalance(ata).catch(() => ({ value: { uiAmount: 0 } }));
 
         if (tokenBalance.value.uiAmount && tokenBalance.value.uiAmount > 0) {
-            console.log(`💼 [RECLAIM] Token balance for ${subKp.publicKey.toBase58().slice(0, 6)}: ${tokenBalance.value.uiAmount}`);
+            console.log(`💼 [RECLAIM] Token balance from wallet ${wallet.publicKey.toBase58()}: ${tokenBalance.value.uiAmount}`);
 
-            await executePumpSwap(connection, subKp, tokenMint, "SELL", "100%");
+            await executePumpSwap(connection, wallet, tokenMint, "SELL", "100%");
         }
 
-        // const balance = await connection.getBalance(subKp.publicKey);
-        // console.log(`💰 [RECLAIM] SOL balance for ${subKp.publicKey.toBase58().slice(0, 6)}: ${balance} Lamports`);
-        // console.log(`💰 [RECLAIM] SOL balance for ${subKp.publicKey.toBase58().slice(0, 6)}: ${balance / LAMPORTS_PER_SOL} SOL`);
-        // if (balance < 5000) continue;
         // // Todo Extract later new function that takes care of closing accounts
         // // const transaction = new Transaction().add(
         // //     createCloseAccountInstruction(
@@ -69,20 +64,9 @@ export async function reclaimAllTokensAndSolPerWallet(wallet: any, connection: C
         // //         lamports: balance - 10000, // Leave a tiny bit for fee
         // //     })
         // // );
-        // const transaction = new Transaction().add(
-        //     SystemProgram.transfer({
-        //         fromPubkey: subKp.publicKey,
-        //         toPubkey: mainWallet.publicKey,
-        //         lamports: balance - 5000,
-        //     })
-        // );
-        // const { blockhash } = await connection.getLatestBlockhash();
-        // transaction.recentBlockhash = blockhash;
-        // transaction.sign(subKp); // Sign with sub-wallet to authorize close/transfer
-        // const sig = await connection.sendRawTransaction(transaction.serialize());
-
+      
     } catch (e: any) {
-        console.error(`[RECLAIM ERROR] Sub-wallet ${wallet.publicKey.slice(0, 4)}:`, e.message);
+        console.error(`[RECLAIM ERROR] Sub-wallet ${wallet.publicKey}:`, e.message);
     }
 }
 
@@ -142,6 +126,12 @@ export async function getAllBalances() {
 //     }
 // };
 
+export const generateSubWalletsInFile = (count: number, file: string ) => {
+    const walletPath = path.join(process.cwd(), file);
+
+    return generateSubWallets(count);
+};
+
 export const generateSubWallets = (count: number) => {
     const walletPath = path.join(process.cwd(), "sub-wallets.json");
     if (fs.existsSync(walletPath)) {
@@ -175,8 +165,10 @@ export const distributeSolPerWallet = async (connection: Connection, mainWallet:
         })
     );
 
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
     const sig = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
-    console.log(`💰 Funded ${currentWallet.publicKey.toBase58().slice(0, 6)}... | Sig: ${sig.slice(0, 8)}`);
+    console.log(`💰 Funded ${currentWallet.publicKey.toBase58()} | Sig: ${sig.slice(0, 8)}`);
 };
 
 // export const distributeSol = async (connection: Connection, mainWallet: Keypair, amountPerWallet: number) => {
@@ -199,11 +191,12 @@ export const distributeSolPerWallet = async (connection: Connection, mainWallet:
 //     }
 // };
 
-export const reclaimAllFundsFromWallet = async (connection: Connection, mainWallet: Keypair, currentWallet: Keypair) => {
+export const reclaimAllSolFromWallet = async (connection: Connection, currentWallet: Keypair, mainWallet: Keypair) => {
     try {
         const balance = await connection.getBalance(currentWallet.publicKey);
+        console.log(`🔄 Reclaiming SOL from ${currentWallet.publicKey.toBase58()} (Balance: ${balance / LAMPORTS_PER_SOL} SOL)`);
 
-        if (balance <= 5000) {
+        if (balance < 5000) {
             console.log(`⚠️  Wallet ${currentWallet.publicKey.toBase58()} has insufficient funds to reclaim (Balance: ${balance / LAMPORTS_PER_SOL} SOL). Skipping...`);
             return;
         }
@@ -218,7 +211,7 @@ export const reclaimAllFundsFromWallet = async (connection: Connection, mainWall
         );
 
         const sig = await sendAndConfirmTransaction(connection, transaction, [currentWallet]);
-        console.log(`✅ Swept ${lamportsToTransfer / LAMPORTS_PER_SOL} SOL from ${currentWallet.publicKey.toBase58().slice(0, 6)}... | Sig: ${sig.slice(0, 8)}`);
+        console.log(`✅ Swept ${lamportsToTransfer / LAMPORTS_PER_SOL} SOL from ${currentWallet.publicKey.toBase58()} | Sig: ${sig.slice(0, 8)}`);
     } catch (err) {
         console.error(`❌ Failed to sweep ${currentWallet.publicKey.toBase58()}:`, err);
     }
