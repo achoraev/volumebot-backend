@@ -117,14 +117,46 @@ export function getMainWallet(): Keypair {
     }
 }
 
-export async function confirmTx(connection: Connection, signature: string): Promise<boolean> {
-    const start = Date.now();
-    while (Date.now() - start < 45000) { // 45s timeout
-        const { value } = await connection.getSignatureStatus(signature);
-        if (value?.confirmationStatus === "confirmed" || value?.confirmationStatus === "finalized") {
-            return !value.err;
-        }
-        await sleepWithAbort(1000, new AbortController().signal);
-    }
-    return false;
+/**
+ * WebSocket-based confirmation. 
+ * Resolves as soon as the transaction hits 'processed' or 'confirmed'.
+ */
+export async function confirmTx(
+    connection: Connection,
+    signature: string,
+    commitment: "processed" | "confirmed" = "processed"
+): Promise<boolean> {
+    return new Promise((resolve) => {
+        let isFinished = false;
+        const start = Date.now();
+        const timeout = 30000; // 30s max wait
+
+        // 2. Open a real-time subscription for this signature
+        const listenerId = connection.onSignature(
+            signature,
+            (result) => {
+                if (isFinished) return;
+                isFinished = true;
+                clearTimeout(timer);
+                try { connection.removeSignatureListener(listenerId); } catch (e) {}
+
+                if (result.err) {
+                    console.error(`❌ Tx Failed on-chain: ${signature}`, result.err);
+                    resolve(false);
+                } else {
+                    resolve(true);
+                }
+            },
+            commitment
+        );
+
+        const timer = setTimeout(() => {
+            if (isFinished) return;
+            isFinished = true;
+
+            try { connection.removeSignatureListener(listenerId); } catch (e) {}
+            console.warn(`⏳ [TIMEOUT] ${signature.slice(0, 8)}`);
+            resolve(false);
+        }, timeout);
+    });
 }

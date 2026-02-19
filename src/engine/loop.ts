@@ -17,7 +17,7 @@ export async function runVolumeLoop(token: string, settings: any, signal: AbortS
 
     // Generate sub-wallets for this loop iteration and choose one randomly to execute trades from
     const batchSize = 10;
-    const walletsData: { secretKey: string }[] = generateSubWallets(batchSize, "sub-wallets.json");
+    const walletsData: { secretKey: string }[] = generateSubWallets(batchSize, "sub-wallets.json", false);
 
     const subWallets = walletsData.map(d => Keypair.fromSecretKey(bs58.decode(d.secretKey)));
     const currentWallet = subWallets[Math.floor(Math.random() * subWallets.length)];

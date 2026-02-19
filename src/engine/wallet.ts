@@ -7,13 +7,14 @@ import {
     Transaction,
     sendAndConfirmTransaction
 } from "@solana/web3.js";
-import { getAssociatedTokenAddress } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, createCloseAccountInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 
 import bs58 from "bs58";
 import fs from "fs";
 import path from "path";
 import { executePumpSwap } from "./pump";
 import { getMainWallet, sleepWithAbort } from "../utils/utils";
+import { SUBWALLETS_FILE } from "../utils/constants";
 
 const SUB_WALLETS_PATH = path.join(process.cwd(), "sub-wallets.json");
 
@@ -71,8 +72,12 @@ export async function reclaimAllTokensPerWallet(connection: Connection, wallet: 
 }
 
 export async function loadWallets(): Promise<Keypair[]> {
+    return await loadWalletsFromFile(SUBWALLETS_FILE);
+}
+
+export async function loadWalletsFromFile(file: string): Promise<Keypair[]> {
+    const walletPath = path.join(process.cwd(), file);
     try {
-        const walletPath = path.join(process.cwd(), "sub-wallets.json");
         const data = fs.readFileSync(walletPath, "utf-8");
         const json = JSON.parse(data);
 
@@ -80,9 +85,10 @@ export async function loadWallets(): Promise<Keypair[]> {
             Keypair.fromSecretKey(bs58.decode(w.secretKey))
         );
     } catch (error) {
-        console.error("Could not load wallets. Will generate it in: ", path.join(process.cwd(), "sub-wallets.json"));
-        const wallets = generateSubWallets(10, "sub-wallets.json");
-        return wallets.map((w: any) => Keypair.fromSecretKey(bs58.decode(w.secretKey)));
+        console.error("Could not load wallets. Error: ", error);
+        // const wallets = generateSubWallets(10, SUBWALLETS_FILE, true);
+        // return wallets.map((w: any) => Keypair.fromSecretKey(bs58.decode(w.secretKey)));
+        return [];
     }
 }
 
@@ -126,9 +132,9 @@ export async function getAllBalances() {
 //     }
 // };
 
-export const generateSubWallets = (count: number, file: string) => {
+export const generateSubWallets = (count: number, file: string, forceGenerate: boolean) => {
     const walletPath = path.join(process.cwd(), file);
-    if (fs.existsSync(walletPath)) {
+    if (fs.existsSync(walletPath) && !forceGenerate) {
         console.log(`⚠️  Sub wallets file already exists. Skipping wallet generation.`);
         return JSON.parse(fs.readFileSync(walletPath, 'utf-8'));
     }
@@ -164,26 +170,6 @@ export const distributeSolPerWallet = async (connection: Connection, mainWallet:
     const sig = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
     console.log(`💰 Funded ${currentWallet.publicKey.toBase58()} | Sig: ${sig.slice(0, 8)}`);
 };
-
-// export const distributeSol = async (connection: Connection, mainWallet: Keypair, amountPerWallet: number) => {
-//     const subWallets = JSON.parse(fs.readFileSync(SUB_WALLETS_PATH, 'utf-8'));
-//     const lamports = amountPerWallet * 1_000_000_000;
-
-//     console.log(`[SYSTEM] Funding ${subWallets.length} wallets with ${amountPerWallet} SOL each...`);
-
-//     for (const walletInfo of subWallets) {
-//         const transaction = new Transaction().add(
-//             SystemProgram.transfer({
-//                 fromPubkey: mainWallet.publicKey,
-//                 toPubkey: new PublicKey(walletInfo.address),
-//                 lamports: lamports,
-//             })
-//         );
-
-//         const sig = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
-//         console.log(`💰 Funded ${walletInfo.address.slice(0, 6)}... | Sig: ${sig.slice(0, 8)}`);
-//     }
-// };
 
 export const reclaimAllSolFromWallet = async (connection: Connection, currentWallet: Keypair, mainWallet: Keypair) => {
     try {
@@ -278,6 +264,52 @@ export async function distributeFunds(amountPerWallet: number) {
         console.error("❌ Distribution failed:", err);
         throw err;
     }
+}
+
+
+export async function reclaimRent(con: Connection, wallet: Keypair) {
+
+    const connection = con;
+    const myWallet = wallet;
+
+    // todo load wallets from file
+    const accounts = await loadWallets()
+
+    const transaction = new Transaction();
+
+    // Todo not implemented yet
+
+    // for (let index = 0; index < accounts.length; index++) {
+    //     const element = array[index];
+
+
+        
+    // }
+
+
+
+
+    // accounts.forEach((accountInfo) => {
+    //     const amount = accountInfo.account.data.parsed.info.tokenAmount.uiAmount;
+    //     const pubkey = accountInfo.pubkey;
+
+    //     // 2. Check if the balance is zero
+    //     if (amount === 0) {
+    //         console.log(`Adding empty account to close list: ${pubkey.toBase58()}`);
+            
+    //         // 3. Add the close instruction
+    //         transaction.add(
+    //             createCloseAccountInstruction(
+    //                 pubkey,    // Account to close
+    //                 myWallet,  // Destination for the SOL refund
+    //                 myWallet   // Owner of the account
+    //             )
+    //         );
+    //     }
+    // });
+
+    // const sig = await sendAndConfirmTransaction(connection, transaction, [wallet]);
+
 }
 
 export { };

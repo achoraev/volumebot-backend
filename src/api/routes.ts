@@ -120,7 +120,8 @@ router.post('/holders', async (req: Request, res: Response) => {
         console.log(`[API] Call Api with body: ${req.body.tokenAddress}`);
         const tokenAddress = req.body.tokenAddress || TOKEN_ADDRESS;
 
-        await buyHolders(tokenAddress, 1, 0.003);
+        // Todo - Add settings for number of holders and amount per holder
+        await buyHolders(tokenAddress, 2, 0.007);
         res.json({ message: "Holder buys executed successfully!" });
     } catch (err) {
         res.status(500).json({ error: "Failed to execute holder buys" });

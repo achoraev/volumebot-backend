@@ -1,6 +1,6 @@
-import { Keypair, VersionedTransaction, Connection } from "@solana/web3.js";
+import { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
 import fetch from "cross-fetch";
-import { confirmTx } from "../utils/utils"; // Import the helper we created
+import { confirmTx, sleepWithAbort } from "../utils/utils";
 
 export async function executePumpSwap(
     connection: Connection,
@@ -8,24 +8,32 @@ export async function executePumpSwap(
     mint: string,
     action: "BUY" | "SELL",
     amount: number | string,
-    slippage: number = 15, // Higher slippage (15%) recommended for retries
+    slippage: number = 25, // Start higher for volume bots
     maxRetries: number = 3
 ) {
-    let currentPriorityFee = 0.0005; // Starting Tip
+    let currentPriorityFee = 0.0006; // Slightly higher starting fee
+    let currentSlippage = Number(slippage);
     const finalAmount = action === "SELL" ? "100%" : amount;
 
-    console.log(`[PUMP] Initiating ${action} for token ${mint} Amount: ${finalAmount} ${action === "BUY" ? "SOL" : "tokens"}, Slippage: ${slippage}%`);
+    console.log(`[PUMP] Initiating ${action} | Amount: ${finalAmount} | Initial Slippage: ${currentSlippage}%`);
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const solBalance = await connection.getBalance(wallet.publicKey);
-            if (solBalance < 5000) {
-                console.log(`⚠️ [BALANCE] Wallet ${wallet.publicKey.toBase58()} too low. Skipping.`);
-                console.log (`💡 Tip: Ensure the wallet has enough SOL to cover fees for retries. Current balance: ${solBalance} `);
+            const solBalanceInSol = solBalance / 1_000_000_000;
+
+            // 1. Precise Balance Check
+            const requiredSol = currentPriorityFee + (action === "BUY" ? parseFloat(amount.toString()) : 0.001);
+            if (solBalanceInSol < requiredSol) {
+                console.log(`⚠️ [BALANCE] ${wallet.publicKey.toBase58().slice(0,6)} has ${solBalanceInSol.toFixed(4)} SOL. Need ${requiredSol.toFixed(4)} SOL.`);
                 return null;
             }
 
-            console.log(`[PUMP] Attempt ${attempt}/${maxRetries} | Fee: ${currentPriorityFee} SOL | ${action} ${finalAmount}`);
+            console.log(`[PUMP] Attempt ${attempt}/${maxRetries} | Fee: ${currentPriorityFee} | Slippage: ${currentSlippage}%`);
+
+            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash({
+                commitment: "processed" // Speed over finality for blockhashes
+            });
 
             const response = await fetch(`https://pumpportal.fun/api/trade-local`, {
                 method: "POST",
@@ -36,55 +44,55 @@ export async function executePumpSwap(
                     mint: mint,
                     amount: finalAmount,
                     denominatedInSol: action === "BUY" ? "true" : "false",
-                    slippage: slippage,
-                    priorityFee: currentPriorityFee,
+                    slippage: currentSlippage, // Numeric
+                    priorityFee: currentPriorityFee, // Numeric
                     pool: "pump"
                 })
             });
 
             if (!response.ok) {
                 const text = await response.text();
-                throw new Error(`PumpPortal API Error (${response.status}): ${text}`);
+                if (response.status === 400) throw new Error(`400 Bad Request: ${text}`);
+                throw new Error(`API Error: ${text}`);
             }
 
             const arrayBuffer = await response.arrayBuffer();
             const tx = VersionedTransaction.deserialize(new Uint8Array(arrayBuffer));
-
-            // 2. Refresh Blockhash & Sign
-            const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+            
             tx.message.recentBlockhash = blockhash;
             tx.sign([wallet]);
 
-            // 3. Send Transaction
+            // 2. Send with high maxRetries at the RPC level
             const signature = await connection.sendRawTransaction(tx.serialize(), {
-                skipPreflight: true, // We check success manually via confirmation
-                maxRetries: 0        // We are handling retries in this loop
+                skipPreflight: true,
+                maxRetries: 2, // Allow the RPC to try re-sending for us
+                preflightCommitment: "processed"
             });
 
-            console.log(`📡 Sent: ${signature.slice(0, 8)}... Waiting for confirmation.`);
+            console.log(`📡 [Attempt ${attempt}] Tx: ${signature.slice(0, 8)}...`);
 
-            // 4. Confirm using the helper function
-            const isConfirmed = await confirmTx(connection, signature);
+            // const isConfirmed = await confirmTx(connection, signature);
+            const isConfirmed = await confirmTx(connection, signature, "processed");
 
             if (isConfirmed) {
                 console.log(`✅ Success: https://solscan.io/tx/${signature}`);
                 return signature;
             }
 
-            // 5. Escalation: If not confirmed, increase fee and try again
-            console.warn(`⚠️ Attempt ${attempt} failed to land. Escalating fee...`);
-            currentPriorityFee += 0.0005;
+            // --- ESCALATION ON FAILURE ---
+            console.warn(`⚠️ Attempt ${attempt} failed (Likely 0x1771 Slippage). Increasing buffers...`);
+            
+            // Boost both fee and slippage aggressively
+            currentPriorityFee += 0.002; 
+            currentSlippage = 99; // 25% -> 40% -> 55%
 
         } catch (e: any) {
             console.error(`[PUMP ERROR] Attempt ${attempt}:`, e.message);
             
-            if (e.message.includes("400")) {
-                console.error("❌ Critical: Malformed request. Check if mint address or amount is valid.");
-                throw e; 
-            }
-
+            if (e.message.includes("400")) throw e; // Stop if payload is wrong
             if (attempt === maxRetries) throw e;
-            await new Promise(res => setTimeout(res, 2000));
+            
+            await sleepWithAbort(1500, new AbortController().signal);
         }
     }
 }
