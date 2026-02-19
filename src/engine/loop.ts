@@ -1,14 +1,12 @@
 import { Connection, Keypair } from "@solana/web3.js";
 import { executeSwap } from '../engine/jupiter';
 import { getTokenBalance, getRandomTargetBuys, getRandomBuyAmount, getRandomDelay, sleepWithAbort, getMainWallet } from '../utils/utils';
-import { generateSubWallets, distributeSolPerWallet, reclaimAllTokensAndSol, reclaimAllTokensPerWallet as reclaimAllTokensPerWallet, reclaimAllSolFromWallet } from './wallet';
+import { generateSubWallets, distributeSolPerWallet, reclaimAllTokensPerWallet as reclaimAllTokensPerWallet } from './wallet';
 import bs58 from "bs58";
 
 export async function runVolumeLoop(token: string, settings: any, signal: AbortSignal) {
     const connection = new Connection(process.env.RPC_URL!);
     const dryRun = settings.dryRun;
-
-    const minD = parseInt(settings.minDelay);
 
     console.log(`[LOOP] Starting volume for ${token}. Mode: ${dryRun ? 'DRY' : 'LIVE'}`);
 
@@ -19,7 +17,7 @@ export async function runVolumeLoop(token: string, settings: any, signal: AbortS
 
     // Generate sub-wallets for this loop iteration and choose one randomly to execute trades from
     const batchSize = 10;
-    const walletsData: { secretKey: string }[] = generateSubWallets(batchSize);
+    const walletsData: { secretKey: string }[] = generateSubWallets(batchSize, "sub-wallets.json");
 
     const subWallets = walletsData.map(d => Keypair.fromSecretKey(bs58.decode(d.secretKey)));
     const currentWallet = subWallets[Math.floor(Math.random() * subWallets.length)];
@@ -33,7 +31,7 @@ export async function runVolumeLoop(token: string, settings: any, signal: AbortS
     } catch (e: any) {
         if (e.message === 'AbortError') throw e;
         console.error(`[LOOP ERROR]`, e.message);
-        await sleepWithAbort(minD, signal);
+        await sleepWithAbort(3000, signal);
     }
 
     console.log(`[LOOP] Restarting loop for ${token} with new random target...`);
@@ -59,8 +57,8 @@ async function executeVolumeTrades(
 
         if (buyCount < targetBuys) {
             const randomBuyAmount = getRandomBuyAmount(settings);
-            buyCount++;
             console.log(`[LOOP] Step ${buyCount + 1}/${targetBuys}: BUY ${randomBuyAmount} SOL from wallet: ${currentWallet.publicKey.toBase58()}`);
+            buyCount++;
             await executeSwap(connection, currentWallet, token, "BUY", settings.dryRun, randomBuyAmount);
         } else {
             console.log(`[LOOP] Target ${targetBuys} reached. Preparing to SELL ALL...`);

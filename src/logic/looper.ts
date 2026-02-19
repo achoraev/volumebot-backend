@@ -3,7 +3,7 @@ import { runVolumeLoop } from '../engine/loop';
 export const activeBots = new Map<string, boolean>();
 const abortControllers = new Map<string, AbortController>();
 
-export const startVolumeLoop = (tokenAddress: string, settings: any) => {
+export const startVolumeLoop = async (tokenAddress: string, settings: any) => {
     if (activeBots.get(tokenAddress)) return;
 
     let makersCreated = 0;
@@ -19,7 +19,7 @@ export const startVolumeLoop = (tokenAddress: string, settings: any) => {
 
         try {
             makersCreated++;
-            runVolumeLoop(tokenAddress, settings, controller.signal);
+            await runVolumeLoop(tokenAddress, settings, controller.signal);
             console.log(`✅ [BATCH] Total Makers hit: ${makersCreated}/${settings.targetMakers}`);
         } catch (err: any) {
             if (err.name === 'AbortError') {

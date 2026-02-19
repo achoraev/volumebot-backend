@@ -1,7 +1,7 @@
 import { Connection, Keypair } from "@solana/web3.js";
 import fetch from "cross-fetch";
 import { trackSimulatedTrade } from "../logic/tracker";
-import { executePumpSwap } from './pump';
+import { executePumpSwap } from './pump2';
 import { getPriceWithFallback, getTokenBalance } from "../utils/utils";
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";

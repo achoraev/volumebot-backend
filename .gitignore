@@ -7,6 +7,7 @@
 /dist
 wallets.json
 sub-wallets.json
+holders-wallets.json
 
 # testing
 /coverage

@@ -13,7 +13,7 @@ import bs58 from "bs58";
 import fs from "fs";
 import path from "path";
 import { executePumpSwap } from "./pump";
-import { sleepWithAbort } from "../utils/utils";
+import { getMainWallet, sleepWithAbort } from "../utils/utils";
 
 const SUB_WALLETS_PATH = path.join(process.cwd(), "sub-wallets.json");
 
@@ -81,7 +81,7 @@ export async function loadWallets(): Promise<Keypair[]> {
         );
     } catch (error) {
         console.error("Could not load wallets. Will generate it in: ", path.join(process.cwd(), "sub-wallets.json"));
-        const wallets = generateSubWallets(10);
+        const wallets = generateSubWallets(10, "sub-wallets.json");
         return wallets.map((w: any) => Keypair.fromSecretKey(bs58.decode(w.secretKey)));
     }
 }
@@ -126,17 +126,11 @@ export async function getAllBalances() {
 //     }
 // };
 
-export const generateSubWalletsInFile = (count: number, file: string ) => {
+export const generateSubWallets = (count: number, file: string) => {
     const walletPath = path.join(process.cwd(), file);
-
-    return generateSubWallets(count);
-};
-
-export const generateSubWallets = (count: number) => {
-    const walletPath = path.join(process.cwd(), "sub-wallets.json");
     if (fs.existsSync(walletPath)) {
         console.log(`⚠️  Sub wallets file already exists. Skipping wallet generation.`);
-        return JSON.parse(fs.readFileSync(SUB_WALLETS_PATH, 'utf-8'));
+        return JSON.parse(fs.readFileSync(walletPath, 'utf-8'));
     }
 
     const newWallets = [];
@@ -148,13 +142,13 @@ export const generateSubWallets = (count: number) => {
             secretKey: bs58.encode(kp.secretKey)
         });
     }
-    fs.writeFileSync(SUB_WALLETS_PATH, JSON.stringify(newWallets, null, 2));
-    console.log(`✅ Generated ${count} sub-wallets in ${SUB_WALLETS_PATH}`);
+    fs.writeFileSync(walletPath, JSON.stringify(newWallets, null, 2));
+    console.log(`✅ Generated ${count} sub-wallets in ${walletPath}`);
     return newWallets;
 };
 
 export const distributeSolPerWallet = async (connection: Connection, mainWallet: Keypair, amountPerWallet: number, currentWallet: Keypair) => {
-    console.log(`[SYSTEM] Funding ${currentWallet.publicKey} wallet with ${amountPerWallet} SOL`);
+    console.log(`[WALLET] Funding ${currentWallet.publicKey} wallet with ${amountPerWallet} SOL`);
 
     const lamports = amountPerWallet * 1_000_000_000;
     const transaction = new Transaction().add(
@@ -219,9 +213,8 @@ export const reclaimAllSolFromWallet = async (connection: Connection, currentWal
 
 export async function withdrawAll() {
     const connection = new Connection(process.env.RPC_URL!, "confirmed");
-    const mainWallet = Keypair.fromSecretKey(bs58.decode(process.env.MAIN_PRIVATE_KEY!));
 
-    reclaimAllFunds(connection, mainWallet);
+    reclaimAllFunds(connection, getMainWallet());
 }
 
 export const reclaimAllFunds = async (connection: Connection, mainWallet: Keypair) => {

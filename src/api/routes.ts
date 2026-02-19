@@ -7,6 +7,7 @@ import { sanitizeSettings } from '../utils/sanitizer';
 import path from 'path';
 import { distributeFunds, withdrawAll } from '../engine/wallet';
 import { buyHolders } from '../engine/holders';
+import { TOKEN_ADDRESS } from '../utils/constants';
 
 const SUB_WALLETS_PATH = path.join(process.cwd(), "sub-wallets.json");
 const connection = new Connection("https://api.mainnet-beta.solana.com");
@@ -116,7 +117,10 @@ router.post('/withdraw', async (req: Request, res: Response) => {
 
 router.post('/holders', async (req: Request, res: Response) => {
     try {
-        await buyHolders(req.body.tokenAddress, req.body.amount);
+        console.log(`[API] Call Api with body: ${req.body.tokenAddress}`);
+        const tokenAddress = req.body.tokenAddress || TOKEN_ADDRESS;
+
+        await buyHolders(tokenAddress, 1, 0.003);
         res.json({ message: "Holder buys executed successfully!" });
     } catch (err) {
         res.status(500).json({ error: "Failed to execute holder buys" });

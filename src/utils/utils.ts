@@ -116,3 +116,15 @@ export function getMainWallet(): Keypair {
         throw new Error("Failed to load Main Wallet: Invalid private key");
     }
 }
+
+export async function confirmTx(connection: Connection, signature: string): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < 45000) { // 45s timeout
+        const { value } = await connection.getSignatureStatus(signature);
+        if (value?.confirmationStatus === "confirmed" || value?.confirmationStatus === "finalized") {
+            return !value.err;
+        }
+        await sleepWithAbort(1000, new AbortController().signal);
+    }
+    return false;
+}
