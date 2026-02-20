@@ -8,6 +8,7 @@ import path from 'path';
 import { distributeFunds, withdrawAll } from '../engine/wallet';
 import { buyHolders } from '../engine/holders';
 import { TOKEN_ADDRESS } from '../utils/constants';
+import { getTimestamp } from '../utils/utils';
 
 const SUB_WALLETS_PATH = path.join(process.cwd(), "sub-wallets.json");
 const connection = new Connection("https://api.mainnet-beta.solana.com");
@@ -60,7 +61,7 @@ router.post('/start-bot', async (req: Request, res: Response) => {
 
     const settings = sanitizeSettings(rawSettings);
 
-    console.log(`[API] Starting bot for ${tokenAddress} with settings:`, settings);
+    console.log(`\n[${getTimestamp()}] [API] Starting bot for ${tokenAddress} with settings:`, settings);
 
     try {
         startVolumeLoop(tokenAddress, settings);
@@ -69,7 +70,7 @@ router.post('/start-bot', async (req: Request, res: Response) => {
         res.status(500).json({ error: "Failed to start bot" });
     }
 
-    console.log(`[API] Bot started for ${tokenAddress}`);
+    console.log(`\n[${getTimestamp()}] [API] Bot started for ${tokenAddress}`);
 });
 
 /**
@@ -135,7 +136,7 @@ router.post('/holders', async (req: Request, res: Response) => {
 //         }
 
 //         const data = JSON.parse(fs.readFileSync(SUB_WALLETS_PATH, 'utf-8'));
-        
+
 //         const walletsWithBalances = await Promise.all(data.map(async (w: any) => {
 //             try {
 //                 const balance = await connection.getBalance(new PublicKey(w.pubkey));

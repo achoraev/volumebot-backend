@@ -117,6 +117,10 @@ export function getMainWallet(): Keypair {
     }
 }
 
+export function getTimestamp() { 
+    return new Date().toISOString().replace('T', ' ').split('.')[0];
+}
+
 /**
  * WebSocket-based confirmation. 
  * Resolves as soon as the transaction hits 'processed' or 'confirmed'.

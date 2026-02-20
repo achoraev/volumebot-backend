@@ -7,13 +7,13 @@ import {
     Transaction,
     sendAndConfirmTransaction
 } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, createCloseAccountInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
+import { getAssociatedTokenAddress } from '@solana/spl-token';
 
 import bs58 from "bs58";
 import fs from "fs";
 import path from "path";
-import { executePumpSwap } from "./pump";
-import { getMainWallet, sleepWithAbort } from "../utils/utils";
+import { executePumpSwap } from "./pump2";
+import { getMainWallet, getTimestamp, sleepWithAbort } from "../utils/utils";
 import { SUBWALLETS_FILE } from "../utils/constants";
 
 const SUB_WALLETS_PATH = path.join(process.cwd(), "sub-wallets.json");
@@ -46,7 +46,7 @@ export async function reclaimAllTokensPerWallet(connection: Connection, wallet: 
         const tokenBalance = await connection.getTokenAccountBalance(ata).catch(() => ({ value: { uiAmount: 0 } }));
 
         if (tokenBalance.value.uiAmount && tokenBalance.value.uiAmount > 0) {
-            console.log(`💼 [RECLAIM] Token balance from wallet ${wallet.publicKey.toBase58()}: ${tokenBalance.value.uiAmount}`);
+            console.log(`💼 [${getTimestamp()}] [RECLAIM] Token balance from wallet ${wallet.publicKey.toBase58()}: ${tokenBalance.value.uiAmount}`);
 
             await executePumpSwap(connection, wallet, tokenMint, "SELL", "100%");
         }
@@ -67,7 +67,7 @@ export async function reclaimAllTokensPerWallet(connection: Connection, wallet: 
         // // );
       
     } catch (e: any) {
-        console.error(`[RECLAIM ERROR] Sub-wallet ${wallet.publicKey}:`, e.message);
+        console.error(`[${getTimestamp()}] [RECLAIM ERROR] Sub-wallet ${wallet.publicKey}:`, e.message);
     }
 }
 
@@ -154,7 +154,7 @@ export const generateSubWallets = (count: number, file: string, forceGenerate: b
 };
 
 export const distributeSolPerWallet = async (connection: Connection, mainWallet: Keypair, amountPerWallet: number, currentWallet: Keypair) => {
-    console.log(`[WALLET] Funding ${currentWallet.publicKey} wallet with ${amountPerWallet} SOL`);
+    console.log(`[${getTimestamp()}] [WALLET] Funding ${currentWallet.publicKey} wallet with ${amountPerWallet} SOL`);
 
     const lamports = amountPerWallet * 1_000_000_000;
     const transaction = new Transaction().add(
@@ -168,16 +168,16 @@ export const distributeSolPerWallet = async (connection: Connection, mainWallet:
     const { blockhash } = await connection.getLatestBlockhash();
     transaction.recentBlockhash = blockhash;
     const sig = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
-    console.log(`💰 Funded ${currentWallet.publicKey.toBase58()} | Sig: ${sig.slice(0, 8)}`);
+    console.log(`💰 [${getTimestamp()}] Funded ${currentWallet.publicKey.toBase58()} | Sig: ${sig.slice(0, 8)}`);
 };
 
 export const reclaimAllSolFromWallet = async (connection: Connection, currentWallet: Keypair, mainWallet: Keypair) => {
     try {
         const balance = await connection.getBalance(currentWallet.publicKey);
-        console.log(`🔄 Reclaiming SOL from ${currentWallet.publicKey.toBase58()} (Balance: ${balance / LAMPORTS_PER_SOL} SOL)`);
+        console.log(`🔄 [${getTimestamp()}] Reclaiming SOL from ${currentWallet.publicKey.toBase58()} (Balance: ${balance / LAMPORTS_PER_SOL} SOL)`);
 
         if (balance < 5000) {
-            console.log(`⚠️  Wallet ${currentWallet.publicKey.toBase58()} has insufficient funds to reclaim (Balance: ${balance / LAMPORTS_PER_SOL} SOL). Skipping...`);
+            console.log(`⚠️  [${getTimestamp()}] Wallet ${currentWallet.publicKey.toBase58()} has insufficient funds to reclaim (Balance: ${balance / LAMPORTS_PER_SOL} SOL). Skipping...`);
             return;
         }
 
@@ -191,9 +191,9 @@ export const reclaimAllSolFromWallet = async (connection: Connection, currentWal
         );
 
         const sig = await sendAndConfirmTransaction(connection, transaction, [currentWallet]);
-        console.log(`✅ Swept ${lamportsToTransfer / LAMPORTS_PER_SOL} SOL from ${currentWallet.publicKey.toBase58()} | Sig: ${sig.slice(0, 8)}`);
+        console.log(`✅ [${getTimestamp()}] Swept ${lamportsToTransfer / LAMPORTS_PER_SOL} SOL from ${currentWallet.publicKey.toBase58()} | Sig: ${sig.slice(0, 8)}`);
     } catch (err) {
-        console.error(`❌ Failed to sweep ${currentWallet.publicKey.toBase58()}:`, err);
+        console.error(`❌ [${getTimestamp()}] Failed to sweep ${currentWallet.publicKey.toBase58()}:`, err);
     }
 };
 

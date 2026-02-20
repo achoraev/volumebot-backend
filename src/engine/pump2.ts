@@ -1,6 +1,6 @@
 import { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
 import fetch from "cross-fetch";
-import { confirmTx, sleepWithAbort } from "../utils/utils";
+import { confirmTx, getTimestamp, sleepWithAbort } from "../utils/utils";
 
 export async function executePumpSwap(
     connection: Connection,
@@ -25,11 +25,11 @@ export async function executePumpSwap(
             // 1. Precise Balance Check
             const requiredSol = currentPriorityFee + (action === "BUY" ? parseFloat(amount.toString()) : 0.001);
             if (solBalanceInSol < requiredSol) {
-                console.log(`⚠️ [BALANCE] ${wallet.publicKey.toBase58().slice(0,6)} has ${solBalanceInSol.toFixed(4)} SOL. Need ${requiredSol.toFixed(4)} SOL.`);
+                console.log(`⚠️ [${getTimestamp()}] [BALANCE] ${wallet.publicKey.toBase58().slice(0,6)} has ${solBalanceInSol.toFixed(4)} SOL. Need ${requiredSol.toFixed(4)} SOL.`);
                 return null;
             }
 
-            console.log(`[PUMP] Attempt ${attempt}/${maxRetries} | Fee: ${currentPriorityFee} | Slippage: ${currentSlippage}%`);
+            console.log(`[${getTimestamp()}] [PUMP] Attempt ${attempt}/${maxRetries} | Fee: ${currentPriorityFee} | Slippage: ${currentSlippage}%`);
 
             const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash({
                 commitment: "processed" // Speed over finality for blockhashes
@@ -69,25 +69,25 @@ export async function executePumpSwap(
                 preflightCommitment: "processed"
             });
 
-            console.log(`📡 [Attempt ${attempt}] Tx: ${signature.slice(0, 8)}...`);
+            console.log(`📡 [${getTimestamp()}] [Attempt ${attempt}] Tx: ${signature.slice(0, 8)}...`);
 
             // const isConfirmed = await confirmTx(connection, signature);
             const isConfirmed = await confirmTx(connection, signature, "processed");
 
             if (isConfirmed) {
-                console.log(`✅ Success: https://solscan.io/tx/${signature}`);
+                console.log(`✅ [${getTimestamp()}] Success: https://solscan.io/tx/${signature}`);
                 return signature;
             }
 
             // --- ESCALATION ON FAILURE ---
-            console.warn(`⚠️ Attempt ${attempt} failed (Likely 0x1771 Slippage). Increasing buffers...`);
+            console.warn(`⚠️ [${getTimestamp()}] Attempt ${attempt} failed (Likely 0x1771 Slippage). Increasing buffers...`);
             
             // Boost both fee and slippage aggressively
             currentPriorityFee += 0.002; 
             currentSlippage = 99; // 25% -> 40% -> 55%
 
         } catch (e: any) {
-            console.error(`[PUMP ERROR] Attempt ${attempt}:`, e.message);
+            console.error(`[${getTimestamp()}] [PUMP ERROR] Attempt ${attempt}:`, e.message);
             
             if (e.message.includes("400")) throw e; // Stop if payload is wrong
             if (attempt === maxRetries) throw e;
