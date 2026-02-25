@@ -35,5 +35,12 @@ export async function buyHolders(tokenAddress: string, holders: number, amountPe
         }
     }
 
+    await holderWallets.forEach(async (holder: { publicKey: any; secretKey: string; }) => {
+        console.log(`[HOLDERS] Processed holder wallet ${holder.publicKey}`);
+
+        await reclaimAllSolFromWallet(connection, Keypair.fromSecretKey(bs58.decode(holder.secretKey)), getMainWallet()).catch(() => { });
+    });
+
+
     console.log("[HOLDERS] Completed buying for all holder wallets.");
 }

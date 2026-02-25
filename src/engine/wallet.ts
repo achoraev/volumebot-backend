@@ -7,67 +7,128 @@ import {
     Transaction,
     sendAndConfirmTransaction
 } from "@solana/web3.js";
-import { getAssociatedTokenAddress } from '@solana/spl-token';
+import { createCloseAccountInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 
 import bs58 from "bs58";
 import fs from "fs";
 import path from "path";
 import { executePumpSwap } from "./pump2";
-import { getMainWallet, getTimestamp, sleepWithAbort } from "../utils/utils";
-import { SUBWALLETS_FILE } from "../utils/constants";
+import { checkBalancePerWallet, getMainWallet, getTimestamp, sleepWithAbort } from "../utils/utils";
+import { HOLDERS_WALLET_FILE, SUBWALLETS_FILE, TOKEN_ADDRESS } from "../utils/constants";
 
-const SUB_WALLETS_PATH = path.join(process.cwd(), "sub-wallets.json");
+const SUB_WALLETS_PATH = path.join(process.cwd(), SUBWALLETS_FILE);
+const HOLDERS_WALLETS_PATH = path.join(process.cwd(), HOLDERS_WALLET_FILE);
 
-export const reclaimAllTokensAndSol = async (connection: Connection, mainWallet: Keypair, tokenMint: string, signal: AbortSignal) => {
-    if (!fs.existsSync(SUB_WALLETS_PATH)) {
-        console.log("⚠️  [RECLAIM] No sub-wallets found for reclaiming. Skipping...");
-        return;
-    }
+// export const reclaimAllTokensAndSol = async (connection: Connection, mainWallet: Keypair, tokenMint: string, signal: AbortSignal) => {
+//     if (!fs.existsSync(SUB_WALLETS_PATH)) {
+//         console.log("⚠️  [RECLAIM] No sub-wallets found for reclaiming. Skipping...");
+//         return;
+//     }
 
-    const subWalletsData = JSON.parse(fs.readFileSync(SUB_WALLETS_PATH, 'utf-8'));
+//     const subWalletsData = JSON.parse(fs.readFileSync(SUB_WALLETS_PATH, 'utf-8'));
 
-    console.log(`[RECLAIM] Starting reclaim for ${subWalletsData.length} wallets...`);
+//     console.log(`[RECLAIM] Starting reclaim for ${subWalletsData.length} wallets...`);
 
-    for (const wallet of subWalletsData) {
-        await reclaimAllTokensPerWallet(connection, wallet, mainWallet, tokenMint);
-        await sleepWithAbort(2000, signal);
-        await reclaimAllSolFromWallet(connection, mainWallet, wallet);
-        console.log(`♻️ Fully Reclaimed: ${wallet.publicKey.toBase58().slice(0, 6)}`);
-    }
+//     for (const wallet of subWalletsData) {
+//         await reclaimAllTokensPerWallet(connection, wallet, mainWallet, tokenMint);
+//         await sleepWithAbort(2000, signal);
+//         await reclaimAllSolFromWallet(connection, mainWallet, wallet);
+//         console.log(`♻️ Fully Reclaimed: ${wallet.publicKey.toBase58().slice(0, 6)}`);
+//     }
 
-    console.log("✅ All wallets processed for reclaiming.");
-};
-
+//     console.log("✅ All wallets processed for reclaiming.");
+// };
 
 export async function reclaimAllTokensPerWallet(connection: Connection, wallet: Keypair, mainWallet: Keypair, tokenMint: string) {
     try {
+
+        console.log(`[RECLAIM] Checking token account for ${wallet.publicKey.toBase58()}... and token mint ${tokenMint}` );
+        // const ata = await getAssociatedTokenAddress(new PublicKey(tokenMint), wallet.publicKey);
         
-        const ata = await getAssociatedTokenAddress(new PublicKey(tokenMint), wallet.publicKey);
-        const tokenBalance = await connection.getTokenAccountBalance(ata).catch(() => ({ value: { uiAmount: 0 } }));
+        const ata2 = await connection.getParsedTokenAccountsByOwner(
+            wallet.publicKey,
+            { mint: new PublicKey(tokenMint) },
+            'processed'
+        );
 
-        if (tokenBalance.value.uiAmount && tokenBalance.value.uiAmount > 0) {
-            console.log(`💼 [${getTimestamp()}] [RECLAIM] Token balance from wallet ${wallet.publicKey.toBase58()}: ${tokenBalance.value.uiAmount}`);
+        const accountInfo = await connection.getAccountInfo(ata2.value[0]?.pubkey);
 
-            await executePumpSwap(connection, wallet, tokenMint, "SELL", "100%");
+        if (!accountInfo) {
+            console.log(`[RECLAIM] No token account found for ${wallet.publicKey.toBase58()}. Nothing to sell.`);
+            return;
+        }
+        const tokenBalance = await connection.getTokenAccountBalance(ata2.value[0].pubkey);
+        const rawAmount = BigInt(tokenBalance.value.amount);
+        console.log(`[RECLAIM] Token balance for ${wallet.publicKey.toBase58()}: ${tokenBalance.value.uiAmount} (raw: ${rawAmount})`);
+
+        if (rawAmount > BigInt(0)) {
+            console.log(`💼 [RECLAIM] Found ${tokenBalance.value.uiAmount} tokens. Executing final sell...`);
+
+            // Execute the swap using your high-speed retry logic
+            const signature = await executePumpSwap(connection, wallet, tokenMint, "SELL", "100%");
+            
+            if (signature) {
+                console.log(`✅ [RECLAIM] Successfully sold remaining tokens.`);
+                // Wait for the ledger to update before the SOL reclaim starts
+                await sleepWithAbort(2000, new AbortController().signal);
+            }
+        } else {
+            console.log(`[RECLAIM] Token balance is already 0 for ${wallet.publicKey.toBase58()}.`);
         }
 
-        // // Todo Extract later new function that takes care of closing accounts
-        // // const transaction = new Transaction().add(
-        // //     createCloseAccountInstruction(
-        // //         ata,                // Account to close
-        // //         mainWallet.publicKey, // Destination for rent SOL
-        // //         subKp.publicKey     // Owner of the account
-        // //     ),
-        // //     // Sweep the remaining SOL
-        // //     SystemProgram.transfer({
-        // //         fromPubkey: subKp.publicKey,
-        // //         toPubkey: mainWallet.publicKey,
-        // //         lamports: balance - 10000, // Leave a tiny bit for fee
-        // //     })
-        // // );
-      
     } catch (e: any) {
-        console.error(`[${getTimestamp()}] [RECLAIM ERROR] Sub-wallet ${wallet.publicKey}:`, e.message);
+        if (e.message.includes("could not find account")) {
+            console.log(`[RECLAIM] ATA already closed for ${wallet.publicKey.toBase58()}.`);
+        } else {
+            console.error(`[RECLAIM ERROR] Sub-wallet ${wallet.publicKey.toBase58()}:`, e.message);
+        }
+    }
+}
+
+export async function closeAccountAndSweepSol(
+    connection: Connection,
+    subWallet: Keypair,
+    mainWallet: Keypair,
+    tokenMint: string
+) {
+    try {
+
+        const ata = await connection.getParsedTokenAccountsByOwner(
+            subWallet.publicKey,
+            { mint: new PublicKey(tokenMint) },
+            'processed'
+        );
+
+        const accountInfo = await connection.getAccountInfo(ata.value[0]?.pubkey);
+        const transaction = new Transaction();
+
+        if (accountInfo) {
+            transaction.add(
+                createCloseAccountInstruction(
+                    ata.value[0].pubkey,
+                    subWallet.publicKey,
+                    subWallet.publicKey
+                )
+            );
+        }
+
+        const balance = await connection.getBalance(subWallet.publicKey);
+        if (balance > 5000) {
+            transaction.add(
+                SystemProgram.transfer({
+                    fromPubkey: subWallet.publicKey,
+                    toPubkey: mainWallet.publicKey,
+                    lamports: balance - 10000,
+                })
+            );
+        }
+
+        if (transaction.instructions.length > 0) {
+            const signature = await sendAndConfirmTransaction(connection, transaction, [subWallet]);
+            console.log(`✨ [CLOSED & SWEPT] Signature: ${signature}`);
+        }
+    } catch (e: any) {
+        console.error("❌ Cleanup failed:", e.message);
     }
 }
 
@@ -76,9 +137,9 @@ export async function loadWallets(): Promise<Keypair[]> {
 }
 
 export async function loadWalletsFromFile(file: string): Promise<Keypair[]> {
-    const walletPath = path.join(process.cwd(), file);
+
     try {
-        const data = fs.readFileSync(walletPath, "utf-8");
+        const data = fs.readFileSync(file, "utf-8");
         const json = JSON.parse(data);
 
         return json.map((w: any) =>
@@ -92,45 +153,75 @@ export async function loadWalletsFromFile(file: string): Promise<Keypair[]> {
     }
 }
 
-export async function getAllBalances() {
-    const connection = new Connection(process.env.RPC_URL!);
-    const wallets = await loadWallets();
+export async function getTokenBalance(
+    connection: Connection,
+    walletAddress: PublicKey,
+    tokenMintAddress: string
+): Promise<{ uiAmount: number; rawAmount: string }> {
+    try {        
+        const ata = await getAssociatedTokenAddress(new PublicKey(tokenMintAddress), walletAddress);
 
-    const publicKeys = wallets.map(w => w.publicKey);
+        const balanceResponse = await connection.getTokenAccountBalance(ata);
 
-    const accounts = await connection.getMultipleAccountsInfo(publicKeys);
+        return {
+            uiAmount: balanceResponse.value.uiAmount ?? 0,
+            rawAmount: balanceResponse.value.amount
+        };
 
-    return accounts.map((acc, index) => ({
-        address: publicKeys[index].toBase58(),
-        balance: acc ? acc.lamports / LAMPORTS_PER_SOL : 0,
-        status: acc ? (acc.lamports / LAMPORTS_PER_SOL < 0.01 ? "LOW" : "OK") : "EMPTY"
-    }));
+    } catch (e: any) {
+        if (e.message.includes("could not find account") || e.message.includes("invalid account data")) {
+            return { uiAmount: 0, rawAmount: "0" };
+        }
+        
+        console.error(`❌ Error fetching balance for ${walletAddress.toBase58()}:`, e.message);
+        return { uiAmount: 0, rawAmount: "0" };
+    }
 }
 
-// export const getRandomWallet = (): Keypair => {
-//     try {
-//         const filePath = path.join(process.cwd(), "wallets.json");
-//         const data = fs.readFileSync(filePath, 'utf8');
-//         const privateKeys = JSON.parse(data);
+export async function getAllBalances() {
+    return await getAllBalancesPerFile(SUB_WALLETS_PATH, TOKEN_ADDRESS);
+}
 
-//         if (!Array.isArray(privateKeys) || privateKeys.length === 0) {
-//             throw new Error("wallets.json is empty or invalid (must be an array).");
-//         }
+export async function getAllBalancesPerFile(file: string, tokenMint?: string) {
+    const connection = new Connection(process.env.RPC_URL!);
+    const wallets = await loadWalletsFromFile(file || HOLDERS_WALLETS_PATH);
+    const publicKeys = wallets.map(w => w.publicKey);
 
-//         const randomIndex = Math.floor(Math.random() * privateKeys.length);
-//         const randomKey = privateKeys[randomIndex];
+    // Get SOL balances
+    const accounts = await connection.getMultipleAccountsInfo(publicKeys);
 
-//         console.log(`✅ Loaded random wallet: ${randomKey.publicKey}`);
+    // Fetch Token Balances (Optional but recommended for your UI)
+    const results = await Promise.all(publicKeys.map(async (pk, index) => {
+        const acc = accounts[index];
+        const solBalance = acc ? acc.lamports / LAMPORTS_PER_SOL : 0;
+        
+        let tokenBalance = 0;
 
-//         return Keypair.fromSecretKey(bs58.decode(randomKey.secretKey));
-//     } catch (error: any) {
-//         console.error("❌ Failed to load random wallet:", error.message + (error.stack ? "\n" + error.stack : ""));
+        if (tokenMint) {
+            try {
+                const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pk, {
+                    mint: new PublicKey(tokenMint),
+                    programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+                });
+                
+                tokenBalance = tokenAccounts.value.reduce((acc, curr) => 
+                    acc + curr.account.data.parsed.info.tokenAmount.uiAmount, 0
+                );
+            } catch (e) {
+                tokenBalance = 0;
+            }
+        }
 
-//         const workerKey = process.env.MAIN_PRIVATE_KEY;
-//         if (workerKey) return Keypair.fromSecretKey(bs58.decode(workerKey));
-//         throw new Error("No valid wallet found in wallets.json or .env");
-//     }
-// };
+        return {
+            address: pk.toBase58(),
+            balance: solBalance,
+            tokenBalance: tokenBalance, // ✅ Now the frontend will see this
+            status: solBalance < 0.01 ? "LOW" : "OK"
+        };
+    }));
+
+    return results;
+}
 
 export const generateSubWallets = (count: number, file: string, forceGenerate: boolean) => {
     const walletPath = path.join(process.cwd(), file);
@@ -173,13 +264,8 @@ export const distributeSolPerWallet = async (connection: Connection, mainWallet:
 
 export const reclaimAllSolFromWallet = async (connection: Connection, currentWallet: Keypair, mainWallet: Keypair) => {
     try {
-        const balance = await connection.getBalance(currentWallet.publicKey);
+        const balance = await checkBalancePerWallet(connection, currentWallet);
         console.log(`🔄 [${getTimestamp()}] Reclaiming SOL from ${currentWallet.publicKey.toBase58()} (Balance: ${balance / LAMPORTS_PER_SOL} SOL)`);
-
-        if (balance < 5000) {
-            console.log(`⚠️  [${getTimestamp()}] Wallet ${currentWallet.publicKey.toBase58()} has insufficient funds to reclaim (Balance: ${balance / LAMPORTS_PER_SOL} SOL). Skipping...`);
-            return;
-        }
 
         const lamportsToTransfer = Math.max(balance - 5000, 0);
         const transaction = new Transaction().add(
@@ -198,23 +284,38 @@ export const reclaimAllSolFromWallet = async (connection: Connection, currentWal
 };
 
 export async function withdrawAll() {
-    const connection = new Connection(process.env.RPC_URL!, "confirmed");
-
-    reclaimAllFunds(connection, getMainWallet());
+    await reclaimAllFundsFromFile(getMainWallet(), SUB_WALLETS_PATH);
+    await reclaimAllFundsFromFile(getMainWallet(), HOLDERS_WALLETS_PATH);
 }
 
-export const reclaimAllFunds = async (connection: Connection, mainWallet: Keypair) => {
-    if (!fs.existsSync(SUB_WALLETS_PATH)) return;
+// export const reclaimAllFunds = async (mainWallet: Keypair) => {
+//     if (!fs.existsSync(SUB_WALLETS_PATH)) return;
 
-    const childWallets = await loadWallets();
+//     reclaimAllFundsFromFile(mainWallet, SUB_WALLETS_PATH);
+// };
 
-    console.log(`[RECLAIM] Starting sweep for ${childWallets.length} wallets...`);
+export const reclaimAllFundsFromFile = async (mainWallet: Keypair, file: string) => {
+    const connection = new Connection(process.env.RPC_URL!, "confirmed");
+
+    if (!fs.existsSync(file)) return;
+
+    const childWallets = await loadWalletsFromFile(file);
+
+    console.log(`[RECLAIM] Starting sweep for ${childWallets.length} wallets from file ${file}...`);
 
     for (const wallet of childWallets) {
         try {
-            const balance = await connection.getBalance(wallet.publicKey);
+            if (file.includes(SUBWALLETS_FILE)) {
+                await reclaimAllTokensPerWallet(connection, wallet, mainWallet, TOKEN_ADDRESS);
+                await closeAccountAndSweepSol(connection, wallet, mainWallet, TOKEN_ADDRESS);
+            }
 
-            if (balance < 5000) continue;
+            const balance = await checkBalancePerWallet(connection, wallet);
+
+            if (balance < 5000) {
+                console.log(`⚠️  Wallet ${wallet.publicKey.toBase58()} has insufficient funds to sweep (Balance: ${balance / LAMPORTS_PER_SOL} SOL). Skipping...`);
+                continue;
+            }
 
             const transaction = new Transaction().add(
                 SystemProgram.transfer({
@@ -225,19 +326,19 @@ export const reclaimAllFunds = async (connection: Connection, mainWallet: Keypai
             );
 
             const sig = await sendAndConfirmTransaction(connection, transaction, [wallet]);
-            console.log(`✅ Swept ${balance / LAMPORTS_PER_SOL} SOL from ${wallet.publicKey.toBase58().slice(0, 4)}...`);
+            console.log(`💸 Swept ${balance / LAMPORTS_PER_SOL} SOL from ${wallet.publicKey.toBase58()} | Sig: ${sig.slice(0, 8)}`);
         } catch (err) {
             console.error(`❌ Failed to sweep ${wallet.publicKey.toBase58()}:`, err);
             return;
         }
     }
     console.log("✅ All funds withdrawn to Main Wallet.");
-};
+}
 
 export async function distributeFunds(amountPerWallet: number) {
     const connection = new Connection(process.env.RPC_URL!, "confirmed");
     const mainWallet = Keypair.fromSecretKey(bs58.decode(process.env.MAIN_PRIVATE_KEY!));
-    const childWallets = await loadWallets();
+    const childWallets = await loadWalletsFromFile(SUBWALLETS_FILE);
 
     const transaction = new Transaction();
 
@@ -264,52 +365,6 @@ export async function distributeFunds(amountPerWallet: number) {
         console.error("❌ Distribution failed:", err);
         throw err;
     }
-}
-
-
-export async function reclaimRent(con: Connection, wallet: Keypair) {
-
-    const connection = con;
-    const myWallet = wallet;
-
-    // todo load wallets from file
-    const accounts = await loadWallets()
-
-    const transaction = new Transaction();
-
-    // Todo not implemented yet
-
-    // for (let index = 0; index < accounts.length; index++) {
-    //     const element = array[index];
-
-
-        
-    // }
-
-
-
-
-    // accounts.forEach((accountInfo) => {
-    //     const amount = accountInfo.account.data.parsed.info.tokenAmount.uiAmount;
-    //     const pubkey = accountInfo.pubkey;
-
-    //     // 2. Check if the balance is zero
-    //     if (amount === 0) {
-    //         console.log(`Adding empty account to close list: ${pubkey.toBase58()}`);
-            
-    //         // 3. Add the close instruction
-    //         transaction.add(
-    //             createCloseAccountInstruction(
-    //                 pubkey,    // Account to close
-    //                 myWallet,  // Destination for the SOL refund
-    //                 myWallet   // Owner of the account
-    //             )
-    //         );
-    //     }
-    // });
-
-    // const sig = await sendAndConfirmTransaction(connection, transaction, [wallet]);
-
 }
 
 export { };

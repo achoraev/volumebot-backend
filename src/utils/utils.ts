@@ -121,6 +121,17 @@ export function getTimestamp() {
     return new Date().toISOString().replace('T', ' ').split('.')[0];
 }
 
+export async function checkBalancePerWallet(connection: Connection, currentWallet: Keypair) {
+    const balance = await connection.getBalance(currentWallet.publicKey);
+
+    if (balance < 5000) {
+        // console.log(`⚠️  [${getTimestamp()}] Wallet ${currentWallet.publicKey.toBase58()} has insufficient funds to reclaim (Balance: ${balance / LAMPORTS_PER_SOL} SOL). Skipping...`);
+        return 0; 
+    }
+
+    return balance;
+}
+
 /**
  * WebSocket-based confirmation. 
  * Resolves as soon as the transaction hits 'processed' or 'confirmed'.

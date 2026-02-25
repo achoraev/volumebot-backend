@@ -1,7 +1,7 @@
 import { Connection, Keypair } from "@solana/web3.js";
 import { executeSwap } from '../engine/jupiter';
 import { getTokenBalance, getRandomTargetBuys, getRandomBuyAmount, getRandomDelay, sleepWithAbort, getMainWallet, getTimestamp } from '../utils/utils';
-import { generateSubWallets, distributeSolPerWallet, reclaimAllTokensPerWallet, reclaimAllSolFromWallet } from './wallet';
+import { generateSubWallets, distributeSolPerWallet, reclaimAllTokensPerWallet, reclaimAllSolFromWallet, withdrawAll } from './wallet';
 import bs58 from "bs58";
 import { SUBWALLETS_FILE } from "../utils/constants";
 
@@ -44,14 +44,17 @@ export async function runVolumeLoop(token: string, settings: any, signal: AbortS
 
         // 5. Cleanup this wallet before moving to the next
         console.log(`🧹 [${getTimestamp()}] [CLEANUP] Reclaiming from ${currentWallet.publicKey.toBase58().slice(0, 6)}`);
-        await reclaimAllTokensPerWallet(connection, currentWallet, getMainWallet(), token);
-        await sleepWithAbort(3000, signal);
-        await reclaimAllSolFromWallet(connection, currentWallet, getMainWallet());
+        // await reclaimAllTokensPerWallet(connection, currentWallet, getMainWallet(), token);
+        // await sleepWithAbort(3000, signal);
+        // await reclaimAllSolFromWallet(connection, currentWallet, getMainWallet());
+        await withdrawAll();
 
     } catch (e: any) {
         if (e.message === 'AbortError') throw e;
         console.error(`[${getTimestamp()}] [MAKER ERROR]`, e.message);
         // Even if it fails, try to reclaim remaining SOL so it's not lost
+        await reclaimAllTokensPerWallet(connection, currentWallet, getMainWallet(), token).catch(() => { });
+        await sleepWithAbort(3000, signal);
         await reclaimAllSolFromWallet(connection, currentWallet, getMainWallet()).catch(() => { });
         await sleepWithAbort(3000, signal);
     }
@@ -91,11 +94,12 @@ async function executeVolumeTrades(
                 console.log(`[${getTimestamp()}] [SELL] Fetching token balance for wallet: ${currentWallet.publicKey.toBase58()}...`);
                 const balance = await getTokenBalance(connection, currentWallet.publicKey, token);
 
-                await sleepWithAbort(2000, signal);
+                await sleepWithAbort(3000, signal);
                 console.log(`[${getTimestamp()}] [SELL] Current token balance: ${balance} (raw units)`);
                 if (parseFloat(balance) > 0) {
                     console.log(`[${getTimestamp()}] [SELL] Selling balance: ${balance} (raw units)`);
                     await executeSwap(connection, currentWallet, token, "SELL", false, parseFloat(balance));
+                    await sleepWithAbort(3000, signal);
                 } else {
                     console.log(`[${getTimestamp()}] [SELL] No token balance to sell for wallet: ${currentWallet.publicKey.toBase58()}. Skipping sell step.`);
                 }
