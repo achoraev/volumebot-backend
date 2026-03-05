@@ -1,15 +1,15 @@
 import e, { Router, Request, Response } from 'express';
 import { Connection, PublicKey, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction, Keypair } from '@solana/web3.js';
 import { startVolumeLoop, stopVolumeLoop } from '../logic/looper';
-import { getAllBalances, getAllBalancesPerFile, loadWalletsFromFile } from '../engine/wallet';
+import { getAllBalances, getAllBalancesPerFile, loadWalletsFromFile, reclaimAllTokensPerWallet } from '../engine/wallet';
 import { getStats } from '../logic/tracker';
 import { sanitizeSettings } from '../utils/sanitizer';
 import bs58 from 'bs58';
 import { distributeFunds, withdrawAll } from '../engine/wallet';
 import { buyHolders } from '../engine/holders';
-import { HOLDERS_WALLET_FILE, HOLDERS_WALLET_PATH, SUB_WALLETS_PATH, TOKEN_ADDRESS } from '../utils/constants';
-import { getTimestamp } from '../utils/utils';
-import { createAssociatedTokenAccountInstruction, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
+import { HOLDERS_WALLET_FILE, HOLDERS_WALLET_PATH, SUB_WALLETS_PATH, SUBWALLETS_FILE, TOKEN_ADDRESS } from '../utils/constants';
+import { getMainWalletPublicKey, getTimestamp, sleepWithAbort } from '../utils/utils';
+import { createAssociatedTokenAccountInstruction, createCloseAccountInstruction, createTransferInstruction, getAssociatedTokenAddress } from '@solana/spl-token';
 
 const connection = new Connection("https://api.mainnet-beta.solana.com");
 
@@ -63,11 +63,12 @@ router.post('/stop-bot', (req: Request, res: Response) => {
 
 router.post('/distribute', async (req: Request, res: Response) => {
     try {
-        const { amount } = req.body;
-        const fundAmount = typeof amount === 'number' ? amount : 0.01;
-        console.log(`[API] Distributing ${fundAmount} SOL to all workers...`);
-        const sig = await distributeFunds(fundAmount);
-        res.json({ message: `Successfully distributed ${fundAmount} SOL!`, signature: sig });
+        const { amount, walletType } = req.body;
+        const finalAmount = !isNaN(parseFloat(amount)) && parseFloat(amount) > 0 ? parseFloat(amount) : 0.01;
+        const file = walletType === 'holders' ? HOLDERS_WALLET_FILE : SUBWALLETS_FILE;
+        console.log(`[API] Distributing ${finalAmount} SOL to all ${walletType} wallets`);
+        const sig = await distributeFunds(finalAmount, file);
+        res.json({ message: `Successfully funded ${walletType} wallets ` + (sig ? `with transaction: ${sig}` : "without transaction signature") });
     } catch (err) {
         console.error("Funding Error: ", err);
         res.status(500).json({ error: "Funding failed. Check Main Wallet balance." });
@@ -109,14 +110,12 @@ router.get('/balances', async (req: Request, res: Response) => {
 router.get('/holder-balances', async (req: Request, res: Response) => {
     try {
         const tokenAddress = req.query.tokenAddress as string;
-        
-        console.log(`[API] Fetching holder balances for token: ${tokenAddress}`);
-        
+
         const balances = await getAllBalancesPerFile(HOLDERS_WALLET_FILE, tokenAddress);
 
         res.json(balances);
     } catch (err) {
-        console.error("Holder Balance Fetch Error: ", err);
+        console.log("Holder Balance Fetch Error: ", err);
         res.status(500).json({ error: "Failed to fetch holder balances" });
     }
 });
@@ -127,57 +126,126 @@ router.post('/reclaim-all', async (req: Request, res: Response) => {
     const connection = new Connection(process.env.RPC_URL!);
     const destPubkey = new PublicKey(destination);
 
-    console.log('Destination for reclaim: ', destination, destPubkey.toBase58());
-    
+    console.log(`[${getTimestamp()}] [RECLAIM] Starting reclaim process for ${type} wallets to destination ${destPubkey.toBase58()} with token mint ${tokenMint}...`);
+
     try {
         const wallets = await loadWalletsFromFile(filePath);
         let totalReclaimed = 0;
 
+        const mintPubkey = new PublicKey(tokenMint);
+        const mintInfo = await connection.getAccountInfo(mintPubkey);
+        
         for (const wallet of wallets) {
             const transaction = new Transaction();
 
-            // 1. Check for Tokens
-            if (tokenMint) {
-                const mintPubkey = new PublicKey(tokenMint);
-                const sourceATA = await getAssociatedTokenAddress(mintPubkey, wallet.publicKey);
-                const destATA = await getAssociatedTokenAddress(mintPubkey, destPubkey);
+            try {
+                if (mintInfo) {
 
-                try {
-                    const tokenAccount = await connection.getTokenAccountBalance(sourceATA);
-                    if (tokenAccount.value.uiAmount && tokenAccount.value.uiAmount > 0) {
-                        // Create destination ATA if it doesn't exist
-                        const accountInfo = await connection.getAccountInfo(destATA);
-                        if (!accountInfo) {
-                            transaction.add(createAssociatedTokenAccountInstruction(
-                                wallet.publicKey, destATA, destPubkey, mintPubkey
-                            ));
+                    const tokenProgramId = mintInfo.owner;
+                    
+                    console.log(`[RECLAIM] Checking tokens for ${wallet.publicKey.toBase58()} with mint ${mintPubkey.toBase58()} using token program ${tokenProgramId.toBase58()}`);
+
+                    const sourceATA = await getAssociatedTokenAddress(mintPubkey, wallet.publicKey, false, tokenProgramId);
+                    const destATA = await getAssociatedTokenAddress(mintPubkey, destPubkey, false, tokenProgramId);
+                    
+                    const sourceAtaInfo = await connection.getAccountInfo(sourceATA);
+
+                    if (sourceAtaInfo) {
+                        const tokenBalance = await connection.getTokenAccountBalance(sourceATA);
+                        
+                        if (tokenBalance.value.uiAmount && tokenBalance.value.uiAmount > 0) {
+
+                            console.log(`[RECLAIM] Token balance for ${wallet.publicKey.toBase58()}: ${tokenBalance.value.uiAmount} tokens. Preparing transfer to ${destPubkey.toBase58()}...`);
+                            const destAtaInfo = await connection.getAccountInfo(destATA);
+                            
+                            if (!destAtaInfo) {
+                                transaction.add(
+                                    createAssociatedTokenAccountInstruction(
+                                        wallet.publicKey, 
+                                        destATA, 
+                                        destPubkey, 
+                                        mintPubkey,
+                                        tokenProgramId
+                                    )
+                                );
+                            }
+                    
+                            transaction.add(
+                                createTransferInstruction(
+                                    sourceATA, 
+                                    destATA, 
+                                    wallet.publicKey, 
+                                    BigInt(tokenBalance.value.amount),
+                                    [],
+                                    tokenProgramId
+                                )
+                            );
+
+                            console.log(`✅ [RECLAIM] Successfully transfer remaining tokens.`);
                         }
                         
-                        transaction.add(createTransferInstruction(
-                            sourceATA, destATA, wallet.publicKey, BigInt(tokenAccount.value.amount)
-                        ));
+                        console.log(`[RECLAIM] Adding close account instruction for ${sourceATA.toBase58()}...`);
+                        transaction.add(
+                            createCloseAccountInstruction(
+                                sourceATA,
+                                getMainWalletPublicKey(),
+                                wallet.publicKey,
+                                [],
+                                tokenProgramId
+                            )
+                        );
                     }
-                } catch (e) { /* No token account found, skip */ }
+                }
+            } catch (e) {
+                console.log(`[RECLAIM] Token check failed for ${wallet.publicKey.toBase58()}, skipping tokens.`);
             }
 
-            // 2. Check for SOL
+            await sleepWithAbort(1000, new AbortController().signal);
+
+            // 2. SOL RECLAIM LOGIC
             const solBalance = await connection.getBalance(wallet.publicKey);
-            if (solBalance > 2000000) { // ~0.002 SOL minimum
+            const BUFFER = 5000;
+
+            if (solBalance > BUFFER) {
+                console.log(`[${getTimestamp()}] [RECLAIM] SOL balance for ${wallet.publicKey.toBase58()}: ${solBalance / LAMPORTS_PER_SOL} SOL`);
+
                 transaction.add(SystemProgram.transfer({
                     fromPubkey: wallet.publicKey,
                     toPubkey: destPubkey,
-                    lamports: solBalance - 1500000, // Leave tiny buffer for fees
+                    lamports: solBalance - BUFFER,
                 }));
+            } else {
+                console.log(`[${getTimestamp()}] [RECLAIM] Insufficient SOL balance to reclaim from ${wallet.publicKey.toBase58()} (Balance: ${solBalance / LAMPORTS_PER_SOL} SOL). Skipping...`);
             }
 
             if (transaction.instructions.length > 0) {
-                await sendAndConfirmTransaction(connection, transaction, [wallet]);
-                totalReclaimed++;
+                try {
+                    await sendAndConfirmTransaction(connection, transaction, [wallet]);
+                    totalReclaimed++;
+                    console.log(`✅ Reclaimed wallet ${totalReclaimed}/${wallets.length}`);
+                } catch (txErr: any) {
+                    console.error(`❌ Failed to reclaim ${wallet.publicKey.toBase58()}:`, txErr.message);
+                }
+            } else {
+                console.log(`[RECLAIM] No assets to reclaim for ${wallet.publicKey.toBase58()}. Skipping transaction.`);
             }
         }
+        console.log(`[${getTimestamp()}] [RECLAIM] Total wallets reclaimed: ${totalReclaimed}`);
         res.json({ success: true, count: totalReclaimed });
     } catch (err: any) {
+        console.log(`[${getTimestamp()}] [RECLAIM ERROR]`, err.message);
         res.status(500).json({ error: err.message });
+    }
+});
+
+router.get('/wallet-count', async (req, res) => {
+    const { type } = req.query;
+    const filePath = type === 'holders' ? HOLDERS_WALLET_PATH : SUB_WALLETS_PATH;
+    try {
+        const wallets = await loadWalletsFromFile(filePath);
+        res.json({ count: wallets.length });
+    } catch (e) {
+        res.json({ count: 0 });
     }
 });
 

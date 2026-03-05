@@ -15,6 +15,7 @@ import path from "path";
 import { executePumpSwap } from "./pump2";
 import { checkBalancePerWallet, getMainWallet, getTimestamp, sleepWithAbort } from "../utils/utils";
 import { HOLDERS_WALLET_FILE, SUBWALLETS_FILE, TOKEN_ADDRESS } from "../utils/constants";
+import { get } from "http";
 
 const SUB_WALLETS_PATH = path.join(process.cwd(), SUBWALLETS_FILE);
 const HOLDERS_WALLETS_PATH = path.join(process.cwd(), HOLDERS_WALLET_FILE);
@@ -39,12 +40,11 @@ const HOLDERS_WALLETS_PATH = path.join(process.cwd(), HOLDERS_WALLET_FILE);
 //     console.log("✅ All wallets processed for reclaiming.");
 // };
 
-export async function reclaimAllTokensPerWallet(connection: Connection, wallet: Keypair, mainWallet: Keypair, tokenMint: string) {
+export async function reclaimAllTokensPerWallet(connection: Connection, wallet: Keypair, tokenMint: string) {
     try {
 
-        console.log(`[RECLAIM] Checking token account for ${wallet.publicKey.toBase58()}... and token mint ${tokenMint}` );
-        // const ata = await getAssociatedTokenAddress(new PublicKey(tokenMint), wallet.publicKey);
-        
+        console.log(`[RECLAIM] Checking token balance for ${wallet.publicKey.toBase58()}...`);
+
         const ata2 = await connection.getParsedTokenAccountsByOwner(
             wallet.publicKey,
             { mint: new PublicKey(tokenMint) },
@@ -305,8 +305,8 @@ export const reclaimAllFundsFromFile = async (mainWallet: Keypair, file: string)
 
     for (const wallet of childWallets) {
         try {
-            if (file.includes(SUBWALLETS_FILE)) {
-                await reclaimAllTokensPerWallet(connection, wallet, mainWallet, TOKEN_ADDRESS);
+            if (file.includes(HOLDERS_WALLET_FILE)) {
+                await reclaimAllTokensPerWallet(connection, wallet, TOKEN_ADDRESS);
                 await closeAccountAndSweepSol(connection, wallet, mainWallet, TOKEN_ADDRESS);
             }
 
@@ -335,10 +335,10 @@ export const reclaimAllFundsFromFile = async (mainWallet: Keypair, file: string)
     console.log("✅ All funds withdrawn to Main Wallet.");
 }
 
-export async function distributeFunds(amountPerWallet: number) {
+export async function distributeFunds(amountPerWallet: number, file: string) {
     const connection = new Connection(process.env.RPC_URL!, "confirmed");
-    const mainWallet = Keypair.fromSecretKey(bs58.decode(process.env.MAIN_PRIVATE_KEY!));
-    const childWallets = await loadWalletsFromFile(SUBWALLETS_FILE);
+    const mainWallet = getMainWallet();
+    const childWallets = await loadWalletsFromFile(file);
 
     const transaction = new Transaction();
 

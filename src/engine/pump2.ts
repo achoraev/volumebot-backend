@@ -83,8 +83,8 @@ export async function executePumpSwap(
             console.warn(`⚠️ [${getTimestamp()}] Attempt ${attempt} failed (Likely 0x1771 Slippage). Increasing buffers...`);
             
             // Boost both fee and slippage aggressively
-            currentPriorityFee += 0.002; 
-            currentSlippage = 99; // 25% -> 40% -> 55%
+            currentPriorityFee += 0.001; 
+            currentSlippage += 25; // 25% -> 40% -> 55%
 
         } catch (e: any) {
             console.error(`[${getTimestamp()}] [PUMP ERROR] Attempt ${attempt}:`, e.message);

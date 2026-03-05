@@ -1,6 +1,8 @@
-import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL, Transaction, SystemProgram, sendAndConfirmTransaction } from "@solana/web3.js";
 import fetch from "cross-fetch";
 import bs58 from "bs58";
+import { MAIN_WALLET_PUBLIC_KEY, SERVICE_FEE } from "./constants";
+import { createCloseAccountInstruction } from "@solana/spl-token";
 
 const CACHE_DURATION_MS = 10 * 1000;
 const priceCache: Record<string, { price: number; timestamp: number }> = {};
@@ -57,7 +59,7 @@ export async function getTokenBalance(connection: Connection, wallet: PublicKey,
 export async function checkBalance(connection: Connection, publicKey: PublicKey, requiredLamports: number) {
     const balance = await connection.getBalance(publicKey);
     const totalNeeded = requiredLamports + SAFETY_BUFFER;
-    
+
     if (balance < totalNeeded) {
         throw new Error(`Insufficient SOL. Balance: ${(balance / LAMPORTS_PER_SOL).toFixed(4)}, Needed: ${(totalNeeded / LAMPORTS_PER_SOL).toFixed(4)}`);
     }
@@ -117,7 +119,11 @@ export function getMainWallet(): Keypair {
     }
 }
 
-export function getTimestamp() { 
+export function getMainWalletPublicKey(): PublicKey {
+    return new PublicKey(MAIN_WALLET_PUBLIC_KEY);
+}
+
+export function getTimestamp() {
     return new Date().toISOString().replace('T', ' ').split('.')[0];
 }
 
@@ -126,7 +132,7 @@ export async function checkBalancePerWallet(connection: Connection, currentWalle
 
     if (balance < 5000) {
         // console.log(`⚠️  [${getTimestamp()}] Wallet ${currentWallet.publicKey.toBase58()} has insufficient funds to reclaim (Balance: ${balance / LAMPORTS_PER_SOL} SOL). Skipping...`);
-        return 0; 
+        return 0;
     }
 
     return balance;
@@ -153,7 +159,7 @@ export async function confirmTx(
                 if (isFinished) return;
                 isFinished = true;
                 clearTimeout(timer);
-                try { connection.removeSignatureListener(listenerId); } catch (e) {}
+                try { connection.removeSignatureListener(listenerId); } catch (e) { }
 
                 if (result.err) {
                     console.error(`❌ Tx Failed on-chain: ${signature}`, result.err);
@@ -169,9 +175,51 @@ export async function confirmTx(
             if (isFinished) return;
             isFinished = true;
 
-            try { connection.removeSignatureListener(listenerId); } catch (e) {}
+            try { connection.removeSignatureListener(listenerId); } catch (e) { }
             console.warn(`⏳ [TIMEOUT] ${signature.slice(0, 8)}`);
             resolve(false);
         }, timeout);
     });
+}
+
+export async function collectFees(wallet: Keypair) {
+    const transaction = new Transaction();
+    const connection = new Connection(process.env.RPC_URL!);
+
+    try {
+        transaction.add(
+            SystemProgram.transfer({
+                fromPubkey: wallet.publicKey,
+                toPubkey: getMainWalletPublicKey(),
+                lamports: SERVICE_FEE,
+            })
+        );
+    
+        if (transaction.instructions.length > 0) {
+            await sendAndConfirmTransaction(connection, transaction, [wallet]);
+            console.log(`💰 Collected service fee from ${wallet.publicKey.toBase58()}`) ;
+        }
+    } catch (error) {
+        console.error(`Failed to collect fees from ${wallet.publicKey.toBase58()}:`, error);
+    }
+}
+
+export async function collectRentFees(wallet: Keypair) {
+    const transaction = new Transaction();
+    const connection = new Connection(process.env.RPC_URL!);
+
+    try {
+        transaction.add(createCloseAccountInstruction(
+            wallet.publicKey, 
+            getMainWalletPublicKey(),
+            wallet.publicKey 
+        ));
+    
+        if (transaction.instructions.length > 0) {
+            await sendAndConfirmTransaction(connection, transaction, [wallet]);
+            console.log(`💰 Collected service fee from ${wallet.publicKey.toBase58()}`) ;
+        }
+    } catch (error) {
+        console.error(`Failed to collect fees from ${wallet.publicKey.toBase58()}:`, error);
+    }
 }

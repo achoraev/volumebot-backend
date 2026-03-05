@@ -8,6 +8,8 @@ export const SUBWALLETS_FILE = "sub-wallets.json";
 export const HOLDERS_WALLET_FILE = "holders-wallets.json";
 export const SUB_WALLETS_PATH = path.join(process.cwd(), SUBWALLETS_FILE);
 export const HOLDERS_WALLET_PATH = path.join(process.cwd(), HOLDERS_WALLET_FILE);
+export const SERVICE_FEE = 500000;
+export const MAIN_WALLET_PUBLIC_KEY = '7uH6T9UdoG44GNHmpHY48GoZwPdtUSkEWBGT3MJpJKTo';
 
 export const ERROR_MESSAGES = {
     NETWORK_ERROR: 'Network error occurred. Please try again.',
